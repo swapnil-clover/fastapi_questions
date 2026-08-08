@@ -1,0 +1,788 @@
+Let’s Start With a Real Problem
+
+In Chapter 6, we built a 404 response the “manual” way — a hand-written if user is None: return JSONResponse(...) block. It worked. But then the assignment quietly asked you to repeat that pattern for a DELETE endpoint and a duplicate-username check too.
+
+Now imagine this app grown up: 40 endpoints, each with 2-3 possible error cases. That’s 100+ copies of nearly identical if ... return JSONResponse(status_code=..., content={"detail": ...}) blocks scattered across your codebase. One day, your team decides all error responses should also include an error_code field for the frontend. Now you have to find and update all 100+ of them, by hand, hoping you don’t miss one.
+
+This is precisely the kind of repetitive, error-prone problem that frameworks are supposed to solve for you — and FastAPI does, beautifully, with exceptions and a global error handler. Let’s fix this once, properly, everywhere.
+
+Each program below is a complete, standalone build — starting from project creation all the way to running and testing it. You can follow them in order, or jump straight to any program and build it on its own.
+What You’ll Learn
+
+    Why raising exceptions is cleaner than manually returning error responses
+    How to use FastAPI’s built-in HTTPException
+    How to design your own custom exception classes for domain-specific errors
+    How to register a global exception handler that catches an exception anywhere in your app and formats the response consistently
+    How to customize FastAPI’s default validation error (422) responses
+    How to safely catch unexpected errors with a generic handler, without leaking internal details to the client
+    Theory + hands-on assignment questions to lock in what you’ve learned
+
+Theory: Exceptions vs. Manually Returning Responses
+
+In Chapter 6, our error-handling code looked like this:
+
+if user is None:
+    return JSONResponse(status_code=404, content={"detail": "not found"})
+
+This is a return-based approach — the function decides what response to send, right there, inline. It works for one endpoint, but it doesn’t scale, and it mixes two different concerns together: business logic (“does this user exist?”) and HTTP response formatting (“what JSON shape and status code do we send back?”).
+
+FastAPI encourages a different approach: raise an exception when something goes wrong, and let a separate, centralized piece of code decide how to turn that exception into an HTTP response.
+
+if user is None:
+    raise HTTPException(status_code=404, detail="not found")
+
+At first glance this looks like a small change. But it unlocks something powerful: you can raise this exception from anywhere — deep inside a service function, a dependency, even a database call — and FastAPI will still catch it and build the correct HTTP response, without that deeply nested code needing to know anything about JSONResponse or Response objects at all.
+Program 1: Using FastAPI’s Built-in HTTPException
+Program Objective
+
+Build a small FastAPI project where a GET /users/{user_id} endpoint uses FastAPI’s built-in HTTPException — the simplest, most direct way to return HTTP errors — instead of a manual JSONResponse.
+Step 1: Create the Project
+
+uv init fastapi-httpexception-demo
+cd fastapi-httpexception-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-httpexception-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/schemas app/services app/routers
+touch app/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+Explanation: The familiar In/Out schema pattern from Chapter 5 — UserOut keeps the password out of every response.
+
+app/services/user_service.py
+
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    for user in _fake_users_db:
+        if user["id"] == user_id:
+            return user
+    return None
+
+Explanation: Same in-memory service layer style used in earlier chapters. get_user_by_id still returns None for a missing user at this stage — we’ll upgrade this in Program 2.
+
+app/routers/users.py
+
+from fastapi import APIRouter, HTTPException, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int):
+    user = get_user_by_id(user_id)
+
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with id {user_id} was not found.",
+        )
+
+    return user
+
+Explanation:
+
+    raise HTTPException(status_code=..., detail=...) — as soon as this line runs, FastAPI immediately stops executing the rest of the function and builds a proper JSON error response: {"detail": "User with id 999 was not found."} with the status code you specified.
+    Compare this to Chapter 6’s version: no JSONResponse import, no manually built dictionary. The code reads much closer to plain English: “if there’s no user, raise a 404.”
+    We no longer need to inject Response into this function at all — HTTPException handles response construction entirely on its own.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI HTTPException Demo",
+    version="1.0.0",
+    description="Chapter 7 - Program 1: Using HTTPException",
+)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the HTTPException Demo"}
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Register a user via POST /users/register and note the id.
+    Call GET /users/{user_id} with that valid id — confirm 200 with the user data.
+    Call GET /users/{user_id} with a missing ID (e.g. 999) — confirm you get a clean 404 with a detail message, built entirely by HTTPException.
+
+HTTPException is generic, though — it doesn’t know anything about your domain. For that, we build our own exceptions in Program 2.
+Program 2: Custom Exception Classes for Domain Errors
+Program Objective
+
+Build a project with custom, meaningful exception classes — UserNotFoundError and UsernameAlreadyExistsError — that describe what actually went wrong in business terms, kept completely separate from HTTP concerns.
+Step 1: Create the Project
+
+uv init fastapi-custom-exceptions-demo
+cd fastapi-custom-exceptions-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-custom-exceptions-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── exceptions.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/core app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/core/exceptions.py
+
+class UserNotFoundError(Exception):
+    """Raised when a requested user does not exist."""
+
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        super().__init__(f"User with id {user_id} was not found.")
+
+
+class UsernameAlreadyExistsError(Exception):
+    """Raised when trying to register a username that's already taken."""
+
+    def __init__(self, username: str):
+        self.username = username
+        super().__init__(f"Username '{username}' is already taken.")
+
+Explanation:
+
+    These are plain Python exceptions — nothing FastAPI-specific. Your service layer shouldn’t need to know anything about HTTP status codes or JSON. It just describes what went wrong, in its own vocabulary.
+    Storing self.user_id / self.username lets whoever catches this exception later build a more detailed message if needed, instead of just a plain string.
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from app.core.exceptions import UserNotFoundError, UsernameAlreadyExistsError
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    if any(u["username"] == user_in.username for u in _fake_users_db):
+        raise UsernameAlreadyExistsError(user_in.username)
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def get_user_by_id(user_id: int) -> dict:
+    for user in _fake_users_db:
+        if user["id"] == user_id:
+            return user
+    raise UserNotFoundError(user_id)
+
+Explanation:
+
+    get_user_by_id no longer returns None for a missing user — it raises UserNotFoundError instead. Callers of this function can no longer forget to check for None and accidentally pass a missing user further down the pipeline.
+    create_user now checks for duplicate usernames before creating anything, raising UsernameAlreadyExistsError if one is found.
+    This file still has zero FastAPI imports. It’s pure business logic, easily testable on its own.
+
+app/routers/users.py
+
+from fastapi import APIRouter, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int):
+    return get_user_by_id(user_id)
+
+Explanation: Look how clean this is now — the router simply calls the service function and returns its result. If something goes wrong, the service layer raises an exception, and it bubbles up automatically.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI Custom Exceptions Demo",
+    version="1.0.0",
+    description="Chapter 7 - Program 2: Custom Exception Classes",
+)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Custom Exceptions Demo"}
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs and call GET /users/999. You’ll see a 500 Internal Server Error — because FastAPI doesn’t yet know what a UserNotFoundError means or which status code it should map to. That’s exactly the gap Program 3 closes.
+Program 3: Registering a Global Exception Handler
+Program Objective
+
+Teach FastAPI how to translate custom exceptions into proper HTTP responses — in exactly one place — so every route in the app benefits automatically.
+Step 1: Create the Project
+
+uv init fastapi-global-handler-demo
+cd fastapi-global-handler-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-global-handler-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── exceptions.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/core app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/core/exceptions.py
+
+class UserNotFoundError(Exception):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        super().__init__(f"User with id {user_id} was not found.")
+
+
+class UsernameAlreadyExistsError(Exception):
+    def __init__(self, username: str):
+        self.username = username
+        super().__init__(f"Username '{username}' is already taken.")
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from app.core.exceptions import UserNotFoundError, UsernameAlreadyExistsError
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    if any(u["username"] == user_in.username for u in _fake_users_db):
+        raise UsernameAlreadyExistsError(user_in.username)
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def get_user_by_id(user_id: int) -> dict:
+    for user in _fake_users_db:
+        if user["id"] == user_id:
+            return user
+    raise UserNotFoundError(user_id)
+
+app/routers/users.py
+
+from fastapi import APIRouter, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int):
+    return get_user_by_id(user_id)
+
+app/main.py
+
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+
+from app.core.exceptions import UserNotFoundError, UsernameAlreadyExistsError
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI Global Handler Demo",
+    version="1.0.0",
+    description="Chapter 7 - Program 3: Global Exception Handlers",
+)
+
+app.include_router(users.router)
+
+
+@app.exception_handler(UserNotFoundError)
+def user_not_found_handler(request: Request, exc: UserNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"error_code": "USER_NOT_FOUND", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(UsernameAlreadyExistsError)
+def username_exists_handler(request: Request, exc: UsernameAlreadyExistsError):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"error_code": "USERNAME_TAKEN", "detail": str(exc)},
+    )
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Global Handler Demo"}
+
+Explanation:
+
+    @app.exception_handler(UserNotFoundError) registers a function that runs automatically, anywhere in the app, whenever a UserNotFoundError is raised — whether it happens in a router, a service function, or three layers deep in a dependency.
+    The handler always receives two arguments: the incoming request and the exc (the exception instance) — a fixed signature FastAPI expects.
+    str(exc) gives us the message built in the exception’s __init__ — no need to duplicate that message here.
+    We used 409 Conflict for UsernameAlreadyExistsError — a more semantically correct status code than 400, since the request itself is well-formed; it’s just in conflict with existing data.
+    Every response also includes an error_code field — small, but useful for frontend teams, who can write if (error.error_code === "USER_NOT_FOUND") instead of matching on the human-readable message.
+    This is the payoff: if tomorrow you need to add a new field to every error response, you update it in these one or two handler functions — not in a hundred scattered routes.
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Call GET /users/999 — confirm you now get a proper 404 with error_code: "USER_NOT_FOUND".
+    Register a user via POST /users/register, then register the exact same username again — confirm you get 409 with error_code: "USERNAME_TAKEN".
+
+Program 4: Customizing Validation Errors and Catching the Unexpected
+Program Objective
+
+Override FastAPI’s default 422 validation error response format, and add a catch-all handler so any unanticipated bug returns a safe, generic 500 response instead of leaking a raw Python traceback to the client.
+Step 1: Create the Project
+
+uv init fastapi-full-error-handling-demo
+cd fastapi-full-error-handling-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-full-error-handling-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── exceptions.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/core app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/core/exceptions.py
+
+class UserNotFoundError(Exception):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+        super().__init__(f"User with id {user_id} was not found.")
+
+
+class UsernameAlreadyExistsError(Exception):
+    def __init__(self, username: str):
+        self.username = username
+        super().__init__(f"Username '{username}' is already taken.")
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from app.core.exceptions import UserNotFoundError, UsernameAlreadyExistsError
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    if any(u["username"] == user_in.username for u in _fake_users_db):
+        raise UsernameAlreadyExistsError(user_in.username)
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def get_user_by_id(user_id: int) -> dict:
+    for user in _fake_users_db:
+        if user["id"] == user_id:
+            return user
+    raise UserNotFoundError(user_id)
+
+app/routers/users.py
+
+from fastapi import APIRouter, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int):
+    return get_user_by_id(user_id)
+
+
+@router.get("/{user_id}/crash")
+def crash_demo(user_id: int):
+    # Deliberately broken - only for testing the catch-all handler below.
+    return 1 / 0
+
+Explanation: The crash_demo route is intentionally broken (a division by zero) so you have a safe, obvious way to trigger and test the catch-all handler without hunting for a real bug.
+
+app/main.py
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+from app.core.exceptions import UserNotFoundError, UsernameAlreadyExistsError
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI Full Error Handling Demo",
+    version="1.0.0",
+    description="Chapter 7 - Program 4: Validation Errors and Catch-All Handling",
+)
+
+app.include_router(users.router)
+
+
+@app.exception_handler(UserNotFoundError)
+def user_not_found_handler(request: Request, exc: UserNotFoundError):
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={"error_code": "USER_NOT_FOUND", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(UsernameAlreadyExistsError)
+def username_exists_handler(request: Request, exc: UsernameAlreadyExistsError):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"error_code": "USERNAME_TAKEN", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error_code": "VALIDATION_ERROR",
+            "detail": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+def unhandled_exception_handler(request: Request, exc: Exception):
+    # Log the real error internally so your team can investigate.
+    print(f"Unhandled error: {exc!r}")
+
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error_code": "INTERNAL_SERVER_ERROR",
+            "detail": "Something went wrong on our end. Please try again later.",
+        },
+    )
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Full Error Handling Demo"}
+
+Explanation:
+
+    RequestValidationError is the exception FastAPI raises internally whenever incoming data fails Pydantic validation. By handling it ourselves, we reshape the response into our own error_code / detail format, matching our other error responses.
+    exc.errors() returns Pydantic’s detailed list of exactly which fields failed and why — genuinely useful for debugging, so we keep it, just under our own response shape.
+    @app.exception_handler(Exception) is a catch-all — it matches literally any exception not already handled by a more specific handler above it. This is your safety net against bugs you didn’t anticipate.
+    We print() (in a real project, use proper logging) the real error internally, but return a generic, safe message to the client. Never expose raw stack traces, file paths, or internal exception messages — that information is a gift to attackers.
+
+    ⚠️ Important: FastAPI matches handlers by exception type, not by decorator order. Still, always keep your catch-all Exception handler conceptually “last resort,” and make sure it never swallows details you actually wanted the client to see (FastAPI handles HTTPException separately by default, so this is safe here).
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Test UserNotFoundError: Call GET /users/999. Confirm 404 with error_code: "USER_NOT_FOUND".
+    Test UsernameAlreadyExistsError: Register the same username twice. Confirm the second call returns 409 with error_code: "USERNAME_TAKEN".
+    Test the validation handler: Call POST /users/register with a password shorter than 8 characters. Confirm the 422 response follows the custom error_code / detail shape.
+    Test the catch-all handler: Call GET /users/1/crash. Confirm you receive a clean, generic 500 response — not a raw traceback — and check your terminal to see the real error was logged there.
+
+Tips & Instructions for Developers
+
+    ✅ Keep your service layer free of HTTPException — raise plain, custom exceptions there, and let handlers registered in main.py translate them into HTTP responses.
+    ✅ Give every custom exception a clear, descriptive name (UserNotFoundError, not Error1) — it should read like a sentence when raised: raise UserNotFoundError(user_id).
+    ✅ Add an error_code (or similar machine-readable field) to your error responses — frontend teams will thank you for not having to string-match human-readable messages.
+    ✅ Always include a catch-all Exception handler in production apps — an unhandled bug should never leak a stack trace to a client.
+    ✅ Log the real error internally in your catch-all handler, even while returning a generic message externally — you still need to know what broke.
+    ❌ Don’t put business logic decisions (“is this a 404 or a 409?”) inside your service functions — that’s an HTTP concern, and belongs in the exception handler, not the exception itself.
+    ❌ Don’t reuse Python’s built-in exceptions (like ValueError) for domain errors if you can avoid it — a custom exception class is far easier to catch precisely and document.
+
+Official FastAPI Documentation References
+
+    Handling Errors
+    HTTPException
+    Install Custom Exception Handlers
+    Override the HTTPException Error Handler
+    Override the RequestValidationError Handler
+    Reuse FastAPI’s Exception Handlers
+
+Theory Questions
+
+    What’s the core difference between manually returning a JSONResponse for an error and raising an exception?
+    Why should custom exceptions like UserNotFoundError avoid importing anything from FastAPI?
+    What’s the purpose of registering a handler for Exception itself, and why should it always return a generic message?
+    Why did we choose 409 Conflict instead of 400 Bad Request for a duplicate username, and what’s the conceptual difference?
+    What problem does adding an error_code field to error responses solve for frontend developers?
+
+Practical Assignment
+
+    New custom exception: Extend Program 4’s project with an InvalidUserDataError exception and a matching global handler that returns 400 Bad Request. Trigger it from a new validation rule of your choice (e.g., reject usernames that are only numbers).
+    DELETE with exceptions: Rebuild the DELETE /users/{user_id} endpoint from Chapter 6’s assignment inside Program 4’s project — this time, have the service layer raise UserNotFoundError if the user doesn’t exist, instead of manually building a JSONResponse.
+    Trace the flow: Add a print() statement inside UserNotFoundError.__init__ and another inside user_not_found_handler. Call GET /users/999 and observe your terminal — write down, in your own words, the exact order these two functions execute in, and why.
+
+Summary
+
+In this chapter, you learned:
+
+    Why raising exceptions is a cleaner, more scalable pattern than manually returning error responses
+    How to use FastAPI’s built-in HTTPException for quick, generic errors
+    How to design custom, domain-specific exception classes that keep your service layer free of HTTP concerns
+    How to register global exception handlers with @app.exception_handler(...) so error formatting lives in exactly one place
+    How to override FastAPI’s default validation error format
+    How to safely catch unexpected errors with a catch-all handler, without leaking internal details

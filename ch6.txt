@@ -1,0 +1,640 @@
+Let’s Start With a Real Problem
+
+Imagine you’re the frontend developer consuming an API. You call GET /users/99, the user doesn’t exist, and the server calmly replies with 200 OK and an empty body.
+
+What do you do with that? Is it an error? Is the user just… blank? Do you show a “not found” message, or silently render nothing? You can’t tell — because the status code lied to you.
+
+This is one of the most common (and most avoidable) mistakes in API design: treating the HTTP status code as an afterthought. A well-designed API communicates through its status code just as much as through its response body. In this chapter, you’ll learn how to make FastAPI speak that language fluently — and how to send back responses that are genuinely useful, not just “data dumps.”
+
+Each program below is a complete, standalone build — starting from project creation all the way to running and testing it. You can follow them in order, or jump straight to any program and build it on its own.
+What You’ll Learn
+
+    Why HTTP status codes are part of your API’s contract, not decoration
+    The most common status codes you’ll actually use (with real examples)
+    How to set status codes declaratively and dynamically at runtime
+    How to use FastAPI’s custom response classes (JSONResponse, PlainTextResponse, and more)
+    How to add custom headers to a response
+    A simple, manual approach to returning error responses (we’ll upgrade this properly with HTTPException in Chapter 7)
+    Theory + hands-on assignment questions to lock in what you’ve learned
+
+Theory: Understanding HTTP Status Codes
+
+Every HTTP response starts with a 3-digit status code. The first digit tells you the category of what happened:
+Range	Category	Meaning
+1xx	Informational	Request received, still processing (rarely used directly in APIs)
+2xx	Success	The request worked
+3xx	Redirection	The client needs to look somewhere else
+4xx	Client Error	The client sent something wrong
+5xx	Server Error	Something broke on the server side
+
+Here are the codes you’ll use constantly as an API developer:
+Code	Name	When to Use It
+200	OK	A successful GET, PUT, or PATCH request
+201	Created	A successful POST that created a new resource
+204	No Content	Success, but there’s nothing to return (e.g., after a DELETE)
+400	Bad Request	The client sent malformed or invalid data
+401	Unauthorized	The client isn’t authenticated (we’ll cover this in Chapter 15)
+403	Forbidden	The client is authenticated but not allowed to do this
+404	Not Found	The requested resource doesn’t exist
+422	Unprocessable Entity	Data failed validation (FastAPI returns this automatically)
+500	Internal Server Error	Something unexpected broke on the server
+
+    💡 Rule of thumb: If you’re ever unsure which status code to return, ask: “If I were the client, what would I want to know just from the status code, before even reading the body?”
+
+Program 1: Returning Dynamic Status Codes
+Program Objective
+
+Build a small FastAPI project with a user registration endpoint and a GET /users/ endpoint that lists all registered users. If there are users, return 200 OK. If the list is empty, return 204 No Content — a small but genuinely useful distinction for frontend developers.
+Step 1: Create the Project
+
+uv init fastapi-status-codes-demo
+cd fastapi-status-codes-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+
+Step 2: Project Structure
+
+fastapi-status-codes-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+Create the folders and empty __init__.py files:
+
+mkdir -p app/core app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "FastAPI Status Codes Demo"
+    app_version: str = "1.0.0"
+
+
+settings = Settings()
+
+Explanation: A small, central place to hold app-wide values like the name and version, instead of hardcoding strings across the project.
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+Explanation: UserCreate defines what the client is allowed to send; UserOut defines what the server is allowed to return. This keeps sensitive fields like passwords out of every response automatically (covered in detail in Chapter 5).
+
+app/services/user_service.py
+
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def list_users() -> list[dict]:
+    return _fake_users_db
+
+Explanation: A simple in-memory list stands in for a real database (we connect a real one in Chapter 8). list_users() just returns whatever currently exists — the interesting logic happens in the router.
+
+app/routers/users.py
+
+from fastapi import APIRouter, Response, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, list_users
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/", response_model=list[UserOut])
+def get_all_users(response: Response):
+    users = list_users()
+
+    if not users:
+        response.status_code = status.HTTP_204_NO_CONTENT
+        return []
+
+    response.status_code = status.HTTP_200_OK
+    return users
+
+Explanation:
+
+    response: Response — FastAPI lets you inject the actual Response object as a parameter. This is the key trick for setting a status code dynamically, based on logic inside your function, instead of a fixed value in the decorator.
+    response.status_code = status.HTTP_204_NO_CONTENT — when there are no users, we explicitly tell the client “this succeeded, but there’s genuinely nothing here” — very different from an error.
+    response_model=list[UserOut] — FastAPI applies the same filtering logic from Chapter 5 to every item in the list, so no password ever leaks here either.
+
+    💡 Note: A true 204 No Content response should have no body. Some HTTP clients complain if a body is attached. Many real teams simply return 200 with an empty list instead — both patterns are common. We show 204 here so you understand the tool; follow your team’s convention in production.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.routers import users
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    description="Chapter 6 - Program 1: Dynamic Status Codes",
+)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Explanation: include_router(users.router) plugs the entire /users router into the main app in one line.
+Step 4: Run and Test the Application
+
+Run the server:
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Call GET /users/ immediately — since no users exist yet, confirm the response code is 204.
+    Call POST /users/register with a sample body:
+
+   {
+     "username": "amitkumar",
+     "email": "amit@example.com",
+     "password": "SuperSecret123"
+   }
+
+    Call GET /users/ again — confirm the response code is now 200 and the user appears in the list.
+
+Program 2: Custom Response Classes
+Program Objective
+
+Build a small FastAPI project with a GET /health endpoint that returns a simple plain text response — the kind of endpoint every production API has, used by monitoring tools like Kubernetes or AWS load balancers to check “is this service alive?”
+Step 1: Create the Project
+
+uv init fastapi-custom-response-demo
+cd fastapi-custom-response-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-custom-response-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   └── routers/
+│       ├── __init__.py
+│       └── health.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/routers
+touch app/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/routers/health.py
+
+from fastapi import APIRouter
+from fastapi.responses import PlainTextResponse
+
+router = APIRouter(tags=["Health"])
+
+
+@router.get("/health", response_class=PlainTextResponse)
+def health_check():
+    return "OK"
+
+Explanation:
+
+    response_class=PlainTextResponse tells FastAPI (and Swagger UI’s documentation) that this endpoint returns plain text, not JSON. Without this, FastAPI would wrap "OK" in quotes as a JSON string instead.
+    This is deliberately the simplest possible endpoint — monitoring tools just want a fast 200 OK with minimal processing.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.routers import health
+
+app = FastAPI(
+    title="FastAPI Custom Response Demo",
+    version="1.0.0",
+    description="Chapter 6 - Program 2: Custom Response Classes",
+)
+
+app.include_router(health.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Custom Response Demo"}
+
+Explanation: FastAPI also ships with JSONResponse, HTMLResponse, RedirectResponse, FileResponse, and StreamingResponse — all living in fastapi.responses and used the same way. We’ll use several of these in later chapters (file uploads, downloads, etc.).
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs, expand GET /health, click “Try it out”, then “Execute”. Confirm:
+
+    The response body shows OK as plain text (not "OK" with quotes)
+    The Content-Type response header shows text/plain, not application/json
+
+Program 3: Adding Custom Headers to a Response
+Program Objective
+
+Build a GET /users/ endpoint that returns the list of users along with a custom X-Total-Count header — a common, developer-friendly pattern that tells the client how many total items exist, useful later when we add pagination in Chapter 16.
+Step 1: Create the Project
+
+uv init fastapi-custom-headers-demo
+cd fastapi-custom-headers-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+
+Step 2: Project Structure
+
+fastapi-custom-headers-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/schemas app/services app/routers
+touch app/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+Explanation: Same In/Out schema pattern from Chapter 5 — UserOut is what gets returned, keeping the password out of the response.
+
+app/services/user_service.py
+
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def list_users() -> list[dict]:
+    return _fake_users_db
+
+Explanation: Same in-memory service layer used in Program 1 — kept simple so the chapter’s focus stays on responses, not data storage.
+
+app/routers/users.py
+
+from fastapi import APIRouter, Response, status
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, list_users
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/", response_model=list[UserOut])
+def get_all_users(response: Response):
+    users = list_users()
+
+    response.headers["X-Total-Count"] = str(len(users))
+
+    if not users:
+        response.status_code = status.HTTP_204_NO_CONTENT
+        return []
+
+    response.status_code = status.HTTP_200_OK
+    return users
+
+Explanation:
+
+    response.headers["X-Total-Count"] — custom headers are always plain strings, so we convert the integer count with str().
+    Prefixing custom headers with X- (e.g., X-Total-Count, X-Request-ID) is a long-standing industry convention that instantly signals “this is a custom header, not a standard HTTP one.”
+    This doesn’t change the response body at all — headers and body are separate channels, useful for different kinds of information.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI Custom Headers Demo",
+    version="1.0.0",
+    description="Chapter 6 - Program 3: Custom Response Headers",
+)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Custom Headers Demo"}
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Register a couple of users via POST /users/register.
+    Call GET /users/, click “Execute”, then check the “Response headers” section below the response body. You should see x-total-count: 2 (or however many users you created).
+
+Program 4: A Manual Approach to Error Responses
+
+We haven’t formally covered exceptions yet (that’s the whole focus of Chapter 7). Let’s solve a “user not found” scenario the manual way first, so you can really appreciate why HTTPException exists once we get there.
+Program Objective
+
+Build a GET /users/{user_id} endpoint that returns 404 Not Found with a clear error message when a user doesn’t exist — using only JSONResponse, no exceptions yet.
+Step 1: Create the Project
+
+uv init fastapi-manual-error-demo
+cd fastapi-manual-error-demo
+uv add fastapi --extra standard
+
+Step 2: Project Structure
+
+fastapi-manual-error-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+mkdir -p app/schemas app/services app/routers
+touch app/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+Step 3: Complete Source Code
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool = True
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from app.schemas.user import UserCreate
+
+_fake_users_db: list[dict] = []
+_next_id = 1
+
+
+def create_user(user_in: UserCreate) -> dict:
+    global _next_id
+
+    hashed_password = f"hashed_{user_in.password}"
+    new_user = {
+        "id": _next_id,
+        "username": user_in.username,
+        "email": user_in.email,
+        "hashed_password": hashed_password,
+        "is_active": True,
+    }
+
+    _fake_users_db.append(new_user)
+    _next_id += 1
+    return new_user
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    for user in _fake_users_db:
+        if user["id"] == user_id:
+            return user
+    return None
+
+Explanation: get_user_by_id loops through the in-memory list and returns None if nothing matches — a completely normal Python pattern, not an error by itself. The router decides what to do with that None.
+
+app/routers/users.py
+
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
+
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate):
+    return create_user(user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int):
+    user = get_user_by_id(user_id)
+
+    if user is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"User with id {user_id} was not found."},
+        )
+
+    return user
+
+Explanation:
+
+    When we return a JSONResponse directly, we bypass response_model entirely — FastAPI sends exactly the dictionary we give it, with exactly the status code we specify.
+    This works, and it’s honest — the client gets a real 404 with a helpful message. But every route needing a “not found” check now has to repeat this same if user is None: return JSONResponse(...) pattern. Imagine writing that in 20 different endpoints.
+    This repetition is exactly the itch that HTTPException and a global error handler scratch — which is exactly where we’re headed in Chapter 7.
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.routers import users
+
+app = FastAPI(
+    title="FastAPI Manual Error Demo",
+    version="1.0.0",
+    description="Chapter 6 - Program 4: Manual Error Responses",
+)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": "Welcome to the Manual Error Demo"}
+
+Step 4: Run and Test the Application
+
+uv run fastapi dev app/main.py
+
+Open http://127.0.0.1:8000/docs:
+
+    Register a user via POST /users/register and note the returned id.
+    Call GET /users/{user_id} with that valid id — confirm you get 200 with the user data.
+    Call GET /users/{user_id} with an ID that doesn’t exist (e.g. 999) — confirm the response code is 404 and the body clearly explains what went wrong.
+
+Tips & Instructions for Developers
+
+    ✅ Pick status codes based on what actually happened — don’t default everything to 200, even for errors.
+    ✅ Use the status module (status.HTTP_404_NOT_FOUND) instead of raw numbers — it’s self-documenting and typo-proof.
+    ✅ Inject Response into your function signature whenever the status code depends on runtime logic — you don’t need to return a whole new Response object just to change the status.
+    ✅ Reach for response_class= when your endpoint genuinely isn’t JSON (health checks, plain text, HTML, files) — don’t force everything into a JSON envelope.
+    ✅ Prefix custom headers clearly (e.g. X-Total-Count) so frontend developers instantly know they’re not standard HTTP headers.
+    ❌ Don’t repeat manual JSONResponse(status_code=..., content=...) error blocks across dozens of routes — that’s a strong signal you need centralized error handling (next chapter!).
+    ❌ Don’t return 200 OK for something that failed “just to keep things simple” — it breaks trust between your API and every client that consumes it.
+
+Official FastAPI Documentation References
+
+    Response Status Code
+    Response Model – Return Type
+    Custom Response Classes
+    Response – Change Status Code Dynamically
+    Response Headers
+    Handling Errors
+
+Theory Questions
+
+    What’s the difference between a 4xx and a 5xx status code, conceptually?
+    Why might an API return 204 No Content instead of 200 OK with an empty list?
+    How does injecting Response into a route function differ from setting status_code= in the decorator?
+    When would you use PlainTextResponse instead of the default JSON response?
+    What’s a practical downside of manually returning JSONResponse for every possible error case across a large application?
+
+Practical Assignment
+
+    Add a DELETE-style status code: Build a new project (or extend Program 4’s project) with a DELETE /users/{user_id} endpoint that removes the user from the in-memory list and returns 204 No Content on success, or 404 Not Found (using the manual JSONResponse approach) if the user doesn’t exist.
+    Custom header practice: Extend Program 2’s project so the /health endpoint also returns an X-API-Version header with a value like "1.0.0".
+    Status code review: Extend Program 4’s project so POST /users/register returns an appropriate status code and message if someone tries to register a username that already exists. Pick the most fitting status code from the table in this chapter.
+
+Summary
+
+In this chapter, you learned:
+
+    Why status codes are a core part of API design, not an afterthought
+    The most important status codes you’ll use in almost every project
+    How to set status codes both declaratively and dynamically (via the injected Response object)
+    How to use custom response classes like PlainTextResponse for non-JSON endpoints
+    How to attach custom headers to a response
+    A manual (but limited) way to return error responses — and why it doesn’t scale well

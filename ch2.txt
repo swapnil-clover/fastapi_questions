@@ -1,0 +1,2319 @@
+
+Chapter 2 — From URLs to Real Data: Routes, Path Parameters & Query Parameters
+By OTLMS / August 3, 2026
+Welcome Back — Now Our API Starts Thinking
+
+In Chapter 1, we created our first FastAPI application.
+
+We learned how to create:
+
+GET /
+GET /health
+GET /about
+
+That was an important first step.
+
+But there was one major limitation.
+
+Our API couldn’t really receive meaningful information from the client.
+
+Suppose we have a bookstore.
+
+A client asks:
+
+GET /books/25
+
+We need to understand:
+
+    What does 25 mean?
+
+It might be the ID of the book.
+
+Now suppose the client asks:
+
+GET /books?category=programming
+
+We need to understand:
+
+    What does category=programming mean?
+
+And what about:
+
+GET /books?category=programming&limit=10
+
+Now we have two pieces of information.
+
+This is where FastAPI becomes much more interesting.
+
+In this chapter, we’re going to learn how FastAPI receives information from URLs and automatically converts and validates it using type annotations. The official FastAPI documentation describes path parameters and query parameters as core parts of this request-handling model.
+
+By the end of this chapter, we’ll have built our first real domain application:
+📚 Book Catalog API
+
+And this application will become the main project foundation that we continue developing throughout the tutorial series.
+1. What You Will Learn
+
+By the end of this chapter, you will understand:
+
+    API routes
+    URL paths
+    HTTP methods
+    path parameters
+    query parameters
+    required query parameters
+    optional query parameters
+    default query parameter values
+    type conversion
+    automatic validation
+    multiple parameters
+    route ordering
+    basic API filtering
+    pagination concepts
+    HTTP status codes
+    API design basics
+    Swagger UI testing
+    how FastAPI generates useful validation errors
+
+You will also build:
+
+    Book Catalog API v1
+
+2. A Quick Review of Chapter 1
+
+We started with:
+
+fastapi-learning/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+Our application contained routes such as:
+
+GET /
+GET /health
+GET /about
+
+We started it with:
+
+uv run fastapi dev app/main.py
+
+And tested it through:
+
+http://127.0.0.1:8000/docs
+
+The key idea was:
+
+HTTP Method + URL Path
+          ↓
+      Path Operation
+          ↓
+       Function
+          ↓
+       Response
+
+Now we’re going to make the URL itself carry information.
+3. What Is a Route?
+
+A route tells the application:
+
+    “When this HTTP request arrives, execute this operation.”
+
+For example:
+
+GET /books
+
+could mean:
+
+    Return the available books.
+
+Another route:
+
+GET /books/10
+
+could mean:
+
+    Return book number 10.
+
+Notice something important.
+
+Both requests begin with:
+
+/books
+
+but the second one contains additional information:
+
+10
+
+That additional value is a path parameter.
+4. Understanding Path Parameters
+
+A path parameter is a variable embedded directly inside the URL path.
+
+For example:
+
+/books/{book_id}
+
+Here:
+
+book_id
+
+is a path parameter.
+
+If a client requests:
+
+/books/10
+
+FastAPI can extract:
+
+book_id = 10
+
+If the client requests:
+
+/books/250
+
+FastAPI extracts:
+
+book_id = 250
+
+The official FastAPI documentation uses this same {parameter} syntax for path parameters.
+
+The general pattern is:
+
+/static-part/{dynamic-value}
+
+For example:
+
+/books/{book_id}
+
+/users/{user_id}
+
+/orders/{order_id}
+
+/products/{product_id}
+
+5. Why Path Parameters Matter
+
+Imagine an application with 1,000 books.
+
+We cannot realistically create:
+
+GET /books/1
+GET /books/2
+GET /books/3
+...
+GET /books/1000
+
+Instead, we create one route:
+
+GET /books/{book_id}
+
+Then:
+
+/books/1
+
+means book 1.
+
+/books/25
+
+means book 25.
+
+/books/500
+
+means book 500.
+
+One route can represent thousands or millions of resources.
+
+This is one of the fundamental ideas behind REST-style APIs.
+6. Our First Path Parameter
+
+Let’s create a small example.
+Program Objective
+
+Create an API endpoint that receives a book ID through the URL and returns that ID.
+Step 1 — Create the Project
+
+Create a new practice project:
+
+uv init path-parameter-demo
+
+Move into it:
+
+cd path-parameter-demo
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+Create:
+
+app/main.py
+
+Your structure should look similar to:
+
+path-parameter-demo/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+Step 2 — Write the Application
+
+Add:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/books/{book_id}")
+async def get_book(book_id: int):
+    return {
+        "book_id": book_id
+    }
+
+Step 3 — Start the Application
+
+Run:
+
+uv run fastapi dev app/main.py
+
+Step 4 — Test the Endpoint
+
+Open:
+
+http://127.0.0.1:8000/books/10
+
+You should receive:
+
+{
+    "book_id": 10
+}
+
+Try:
+
+http://127.0.0.1:8000/books/25
+
+Response:
+
+{
+    "book_id": 25
+}
+
+Try:
+
+http://127.0.0.1:8000/books/100
+
+Response:
+
+{
+    "book_id": 100
+}
+
+One endpoint is handling all three requests.
+7. Source Code Explanation
+
+Let’s examine the important part.
+
+@app.get("/books/{book_id}")
+
+The {book_id} section tells FastAPI that the URL contains a dynamic value.
+
+Then:
+
+async def get_book(book_id: int):
+
+receives that value.
+
+The connection is:
+
+URL
+/books/25
+   ↓
+book_id
+   ↓
+25
+   ↓
+get_book(book_id=25)
+
+The type annotation:
+
+book_id: int
+
+is particularly important.
+
+We are telling FastAPI:
+
+    book_id must be an integer.
+
+FastAPI then performs parsing and validation based on that type declaration.
+8. FastAPI Performs Automatic Type Conversion
+
+Consider:
+
+/books/25
+
+The value comes through the URL as text.
+
+But we declared:
+
+book_id: int
+
+FastAPI converts it into an integer before passing it to our function.
+
+Conceptually:
+
+URL
+   ↓
+"25"
+   ↓
+FastAPI
+   ↓
+25
+   ↓
+int
+
+This is extremely useful.
+
+We don’t have to manually write conversion logic such as:
+
+convert string to integer
+
+FastAPI handles it for us.
+
+The official documentation specifically highlights this automatic conversion and validation behavior for typed path parameters.
+9. What Happens If the Client Sends Invalid Data?
+
+Try:
+
+http://127.0.0.1:8000/books/hello
+
+Our endpoint expects:
+
+int
+
+but received:
+
+hello
+
+FastAPI automatically returns a validation error.
+
+The exact error representation can vary slightly with FastAPI/Pydantic versions, but it will identify the problem as being with the book_id path parameter.
+
+The important concept is:
+
+Client
+   |
+   | /books/hello
+   v
+FastAPI
+   |
+   | Expected int
+   |
+   X
+Validation Error
+
+We didn’t write a single if statement to perform this validation.
+
+That is one of FastAPI’s major strengths.
+10. Path Parameters Are Required
+
+Consider:
+
+/books/{book_id}
+
+The path parameter is part of the URL itself.
+
+Therefore:
+
+/books/25
+
+is valid.
+
+But:
+
+/books/
+
+doesn’t provide a book_id.
+
+A path parameter is inherently required because it is part of the path. The FastAPI documentation explicitly notes this behavior.
+
+This is different from query parameters, which can be optional.
+
+That distinction is extremely important.
+11. Query Parameters
+
+Now let’s introduce another powerful concept.
+
+Consider this URL:
+
+/books?category=programming
+
+Everything after:
+
+?
+
+is part of the query string.
+
+So:
+
+/books?category=programming
+
+contains:
+
+Path:
+ /books
+
+Query:
+ category=programming
+
+Multiple query parameters are separated using:
+
+&
+
+For example:
+
+/books?category=programming&limit=10
+
+contains:
+
+category=programming
+limit=10
+
+The official FastAPI documentation explains that parameters not included in the path are automatically interpreted as query parameters.
+12. Your First Query Parameter
+Program Objective
+
+Create an endpoint that accepts a search term through a query parameter.
+Step 1 — Create the Application
+
+Use:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/books")
+async def search_books(q: str | None = None):
+    return {
+        "search": q
+    }
+
+Step 2 — Start the Application
+
+uv run fastapi dev app/main.py
+
+Step 3 — Test Without a Query Parameter
+
+Open:
+
+http://127.0.0.1:8000/books
+
+Response:
+
+{
+    "search": null
+}
+
+Step 4 — Test With a Query Parameter
+
+Open:
+
+http://127.0.0.1:8000/books?q=fastapi
+
+Response:
+
+{
+    "search": "fastapi"
+}
+
+Try:
+
+http://127.0.0.1:8000/books?q=database
+
+Response:
+
+{
+    "search": "database"
+}
+
+13. Why Is q Optional?
+
+Look at:
+
+q: str | None = None
+
+This says:
+
+q
+↓
+string
+OR
+None
+
+and:
+
+= None
+
+gives it a default value.
+
+Therefore:
+
+/books
+
+is valid.
+
+And:
+
+/books?q=fastapi
+
+is also valid.
+
+FastAPI uses the default value to understand that this query parameter is optional.
+14. Required Query Parameters
+
+What if we want a query parameter to be mandatory?
+
+Consider:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/search")
+async def search(q: str):
+    return {
+        "query": q
+    }
+
+Because we didn’t provide a default value:
+
+q: str
+
+FastAPI considers q required.
+
+This works:
+
+/search?q=fastapi
+
+But this:
+
+/search
+
+produces a validation error.
+
+The official documentation describes this distinction between required and optional query parameters.
+15. Default Query Parameters
+
+Query parameters can have useful defaults.
+
+Consider:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/books")
+async def list_books(
+    skip: int = 0,
+    limit: int = 10
+):
+    return {
+        "skip": skip,
+        "limit": limit
+    }
+
+Now:
+
+/books
+
+means:
+
+skip = 0
+limit = 10
+
+But:
+
+/books?skip=20
+
+means:
+
+skip = 20
+limit = 10
+
+And:
+
+/books?skip=20&limit=5
+
+means:
+
+skip = 20
+limit = 5
+
+This pattern is frequently used for pagination.
+
+FastAPI supports automatic type conversion and validation for these typed query parameters as well.
+16. Path Parameters + Query Parameters Together
+
+This is where things become interesting.
+
+We can have:
+
+/books/{book_id}?include_reviews=true
+
+The path contains:
+
+book_id
+
+The query contains:
+
+include_reviews
+
+Example:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/books/{book_id}")
+async def get_book(
+    book_id: int,
+    include_reviews: bool = False
+):
+    return {
+        "book_id": book_id,
+        "include_reviews": include_reviews
+    }
+
+Now:
+
+/books/10
+
+produces:
+
+{
+    "book_id": 10,
+    "include_reviews": false
+}
+
+while:
+
+/books/10?include_reviews=true
+
+produces:
+
+{
+    "book_id": 10,
+    "include_reviews": true
+}
+
+FastAPI determines which parameters are path parameters and which are query parameters from the route and function signature.
+17. Boolean Query Parameters
+
+FastAPI can also convert common boolean representations.
+
+For example:
+
+/books/10?include_reviews=true
+
+can be interpreted as:
+
+True
+
+Similarly, FastAPI supports common boolean representations such as true, false, 1, and 0, among others.
+
+This means we can write:
+
+include_reviews: bool = False
+
+instead of manually parsing the incoming value.
+18. Multiple Path Parameters
+
+We aren’t limited to one path parameter.
+
+We can have:
+
+/users/{user_id}/books/{book_id}
+
+For example:
+
+/users/10/books/25
+
+This can represent:
+
+    Book 25 belonging to user 10.
+
+Example:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/users/{user_id}/books/{book_id}")
+async def get_user_book(
+    user_id: int,
+    book_id: int
+):
+    return {
+        "user_id": user_id,
+        "book_id": book_id
+    }
+
+FastAPI handles both parameters.
+19. Multiple Path Parameters + Query Parameters
+
+We can combine everything:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/users/{user_id}/books/{book_id}")
+async def get_user_book(
+    user_id: int,
+    book_id: int,
+    include_reviews: bool = False,
+    language: str | None = None
+):
+    return {
+        "user_id": user_id,
+        "book_id": book_id,
+        "include_reviews": include_reviews,
+        "language": language
+    }
+
+A request might be:
+
+/users/10/books/25?include_reviews=true&language=en
+
+FastAPI understands:
+
+Path Parameters
+----------------
+user_id = 10
+book_id = 25
+
+Query Parameters
+----------------
+include_reviews = true
+language = en
+
+This is a powerful concept.
+20. A Critical API Design Lesson
+
+Just because we can put many parameters into a URL doesn’t mean we should.
+
+For example:
+
+/users/10/books/25/reviews/100/comments/5
+
+might be technically possible.
+
+But deeply nested URLs can become difficult to understand and maintain.
+
+Good API design is about more than making the code work.
+
+We want APIs that are:
+
+    predictable
+    readable
+    consistent
+    discoverable
+    maintainable
+    easy to document
+    easy for clients to consume
+
+Throughout this series, we’ll learn these design principles gradually.
+21. Route Ordering Matters
+
+Consider these two endpoints:
+
+@app.get("/users/me")
+async def get_current_user():
+    ...
+
+and:
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: int):
+    ...
+
+What should happen when the client requests:
+
+/users/me
+
+FastAPI evaluates path operations in order, so fixed paths such as /users/me should be declared before /users/{user_id}. Otherwise the dynamic path could match "me" as the user_id value. The official documentation specifically warns about this ordering issue.
+
+The safe structure is:
+
+@app.get("/users/me")
+async def get_current_user():
+    ...
+
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: int):
+    ...
+
+This is a small detail that can cause surprisingly confusing bugs.
+
+Remember:
+
+    Specific routes before dynamic routes.
+
+22. Program 3 — Build the Book Catalog API
+
+Now we are going to build the first application that will become part of our long-term tutorial project.
+Program Objective
+
+Create a Book Catalog API that allows clients to:
+
+    retrieve all books
+    retrieve a specific book
+    search books
+    filter by category
+    limit results
+    skip results
+    request short descriptions
+    inspect the API using Swagger UI
+
+At this stage, we will intentionally use in-memory data.
+
+We will introduce a database later.
+
+This is important because we want to learn HTTP and API design before introducing database complexity.
+23. Step-by-Step: Create the Book Catalog Project
+
+We will create a separate project for this chapter’s complete example.
+
+uv init book-catalog-api
+
+Move into it:
+
+cd book-catalog-api
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+Create:
+
+app/main.py
+
+Our initial structure:
+
+book-catalog-api/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+24. Step 1 — Create Sample Data
+
+Inside:
+
+app/main.py
+
+we’ll create a small in-memory catalog.
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+books = [
+    {
+        "id": 1,
+        "title": "Clean Code",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2008,
+        "description": "A practical guide to writing readable and maintainable code."
+    },
+    {
+        "id": 2,
+        "title": "Clean Architecture",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2017,
+        "description": "A guide to designing maintainable software systems."
+    },
+    {
+        "id": 3,
+        "title": "The Pragmatic Programmer",
+        "author": "Andrew Hunt and David Thomas",
+        "category": "software",
+        "year": 1999,
+        "description": "Practical principles for becoming a better software developer."
+    },
+    {
+        "id": 4,
+        "title": "Designing Data-Intensive Applications",
+        "author": "Martin Kleppmann",
+        "category": "database",
+        "year": 2017,
+        "description": "A deep look at modern data systems and distributed applications."
+    }
+]
+
+This isn’t a database.
+
+It is simply a list stored in memory.
+
+That is intentional.
+25. Step 2 — Create the Root Endpoint
+
+Add:
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to the Book Catalog API"
+    }
+
+This provides a simple entry point.
+26. Step 3 — Create the Books Endpoint
+
+Add:
+
+@app.get("/books")
+async def list_books():
+    return {
+        "books": books
+    }
+
+Now:
+
+GET /books
+
+returns the complete catalog.
+27. Step 4 — Retrieve a Specific Book
+
+Add:
+
+@app.get("/books/{book_id}")
+async def get_book(book_id: int):
+    for book in books:
+        if book["id"] == book_id:
+            return book
+
+    return {
+        "message": "Book not found"
+    }
+
+Now:
+
+/books/1
+
+returns the first book.
+
+And:
+
+/books/4
+
+returns the fourth book.
+28. Step 5 — Add Search
+
+Let’s allow clients to search by title.
+
+Add:
+
+@app.get("/search")
+async def search_books(q: str | None = None):
+    if q is None:
+        return {
+            "results": books
+        }
+
+    results = [
+        book
+        for book in books
+        if q.lower() in book["title"].lower()
+    ]
+
+    return {
+        "results": results
+    }
+
+Now:
+
+/search?q=clean
+
+can return books whose titles contain:
+
+clean
+
+29. Step 6 — Add Category Filtering
+
+Now let’s create:
+
+GET /books?category=software
+
+Update the list endpoint:
+
+@app.get("/books")
+async def list_books(category: str | None = None):
+    if category is None:
+        return {
+            "books": books
+        }
+
+    filtered_books = [
+        book
+        for book in books
+        if book["category"].lower() == category.lower()
+    ]
+
+    return {
+        "books": filtered_books
+    }
+
+Now:
+
+/books
+
+returns all books.
+
+But:
+
+/books?category=database
+
+returns only database books.
+30. Step 7 — Add Pagination
+
+A real catalog might contain thousands of books.
+
+Returning everything at once isn’t usually a good idea.
+
+Let’s add:
+
+skip
+limit
+
+Update the endpoint:
+
+@app.get("/books")
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10
+):
+    filtered_books = books
+
+    if category is not None:
+        filtered_books = [
+            book
+            for book in books
+            if book["category"].lower() == category.lower()
+        ]
+
+    paginated_books = filtered_books[skip:skip + limit]
+
+    return {
+        "books": paginated_books,
+        "skip": skip,
+        "limit": limit,
+        "total": len(filtered_books)
+    }
+
+Now:
+
+/books
+
+uses:
+
+skip = 0
+limit = 10
+
+while:
+
+/books?skip=2&limit=1
+
+starts at the third record and returns one record.
+
+This is a common pagination pattern.
+31. Step 8 — Add Short Description Support
+
+Let’s add another query parameter:
+
+short
+
+Update the endpoint:
+
+@app.get("/books")
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+    short: bool = False
+):
+    filtered_books = books
+
+    if category is not None:
+        filtered_books = [
+            book
+            for book in books
+            if book["category"].lower() == category.lower()
+        ]
+
+    paginated_books = filtered_books[skip:skip + limit]
+
+    if short:
+        paginated_books = [
+            {
+                "id": book["id"],
+                "title": book["title"],
+                "author": book["author"]
+            }
+            for book in paginated_books
+        ]
+
+    return {
+        "books": paginated_books,
+        "skip": skip,
+        "limit": limit,
+        "total": len(filtered_books)
+    }
+
+Now the client can request:
+
+/books?short=true
+
+This demonstrates how several query parameters can work together.
+32. Step 9 — Start the Application
+
+Run:
+
+uv run fastapi dev app/main.py
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+You should now see:
+
+GET /
+GET /books
+GET /books/{book_id}
+GET /search
+
+Swagger UI will automatically display the parameters.
+
+This is where FastAPI’s automatic documentation starts becoming extremely useful.
+33. Test the API
+
+Try these requests.
+Get all books
+
+GET /books
+
+Filter by category
+
+GET /books?category=software
+
+Pagination
+
+GET /books?skip=1&limit=2
+
+Short responses
+
+GET /books?short=true
+
+Combine parameters
+
+GET /books?category=software&skip=0&limit=2&short=true
+
+Get a specific book
+
+GET /books/2
+
+Search
+
+GET /search?q=clean
+
+34. The Complete Source Code
+
+At this point, our application looks like:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+books = [
+    {
+        "id": 1,
+        "title": "Clean Code",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2008,
+        "description": "A practical guide to writing readable and maintainable code."
+    },
+    {
+        "id": 2,
+        "title": "Clean Architecture",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2017,
+        "description": "A guide to designing maintainable software systems."
+    },
+    {
+        "id": 3,
+        "title": "The Pragmatic Programmer",
+        "author": "Andrew Hunt and David Thomas",
+        "category": "software",
+        "year": 1999,
+        "description": "Practical principles for becoming a better software developer."
+    },
+    {
+        "id": 4,
+        "title": "Designing Data-Intensive Applications",
+        "author": "Martin Kleppmann",
+        "category": "database",
+        "year": 2017,
+        "description": "A deep look at modern data systems and distributed applications."
+    }
+]
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to the Book Catalog API"
+    }
+
+
+@app.get("/books")
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+    short: bool = False
+):
+    filtered_books = books
+
+    if category is not None:
+        filtered_books = [
+            book
+            for book in books
+            if book["category"].lower() == category.lower()
+        ]
+
+    paginated_books = filtered_books[skip:skip + limit]
+
+    if short:
+        paginated_books = [
+            {
+                "id": book["id"],
+                "title": book["title"],
+                "author": book["author"]
+            }
+            for book in paginated_books
+        ]
+
+    return {
+        "books": paginated_books,
+        "skip": skip,
+        "limit": limit,
+        "total": len(filtered_books)
+    }
+
+
+@app.get("/books/{book_id}")
+async def get_book(book_id: int):
+    for book in books:
+        if book["id"] == book_id:
+            return book
+
+    return {
+        "message": "Book not found"
+    }
+
+
+@app.get("/search")
+async def search_books(q: str | None = None):
+    if q is None:
+        return {
+            "results": books
+        }
+
+    results = [
+        book
+        for book in books
+        if q.lower() in book["title"].lower()
+    ]
+
+    return {
+        "results": results
+    }
+
+35. Source Code Explanation
+
+Now let’s understand how the application works.
+Application Creation
+
+app = FastAPI()
+
+Creates the FastAPI application.
+In-Memory Data
+
+books = [...]
+
+contains our temporary book catalog.
+
+We’re deliberately not using a database yet.
+
+Why?
+
+Because we’re currently studying:
+
+HTTP
++
+Routes
++
+Parameters
++
+Validation
+
+Introducing database concepts at this point would distract from those fundamentals.
+
+Later, we’ll replace this list with a real database.
+36. The /books Endpoint
+
+The endpoint:
+
+@app.get("/books")
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+    short: bool = False
+):
+
+contains four query parameters.
+category
+
+category: str | None = None
+
+Optional string.
+
+Example:
+
+/books?category=software
+
+skip
+
+skip: int = 0
+
+Integer with a default of zero.
+
+Used for pagination.
+limit
+
+limit: int = 10
+
+Integer with a default of ten.
+
+Used to limit the number of returned records.
+short
+
+short: bool = False
+
+Boolean controlling whether we return a reduced representation.
+37. Filtering
+
+This code:
+
+if category is not None:
+    filtered_books = [
+        book
+        for book in books
+        if book["category"].lower() == category.lower()
+    ]
+
+means:
+
+    If the client supplied a category, keep only books belonging to that category.
+
+For:
+
+/books?category=software
+
+the result contains only:
+
+category = software
+
+38. Pagination
+
+This line:
+
+paginated_books = filtered_books[skip:skip + limit]
+
+implements basic pagination.
+
+Suppose:
+
+skip = 2
+limit = 2
+
+Then we’re effectively asking for:
+
+records[2:4]
+
+The conceptual flow is:
+
+All Books
+   ↓
+Filter
+   ↓
+Pagination
+   ↓
+Response
+
+In a real application, we’ll eventually perform pagination at the database layer rather than loading every record into memory.
+
+That’s an important production-oriented distinction.
+39. Short Responses
+
+When:
+
+short=true
+
+we create a smaller representation:
+
+{
+    "id": 1,
+    "title": "Clean Code",
+    "author": "Robert C. Martin"
+}
+
+instead of returning:
+
+id
+title
+author
+category
+year
+description
+
+This introduces an important API design concept:
+
+    The client doesn’t always need every piece of data.
+
+Later, response models will give us a much cleaner and more robust way to control API responses.
+40. Retrieving a Specific Book
+
+Our endpoint:
+
+@app.get("/books/{book_id}")
+
+receives:
+
+book_id: int
+
+Then:
+
+for book in books:
+    if book["id"] == book_id:
+        return book
+
+searches the in-memory collection.
+
+For:
+
+/books/3
+
+FastAPI passes:
+
+book_id = 3
+
+The function searches the list.
+41. A Problem With Our Current Implementation
+
+There’s something important we need to fix later.
+
+When the book isn’t found, we’re returning:
+
+{
+    "message": "Book not found"
+}
+
+But the HTTP response will still be successful unless we explicitly change the status code.
+
+From an API design perspective, that’s not ideal.
+
+A resource that doesn’t exist should normally produce:
+
+404 Not Found
+
+rather than a normal successful response.
+
+We’ll learn proper exception handling and HTTPException in a later chapter.
+
+For now, we’re intentionally keeping the example focused.
+42. HTTP Status Codes
+
+Every HTTP response contains a status code.
+
+Common examples:
+Code	Meaning	Typical Use
+200	OK	Successful request
+201	Created	New resource created
+204	No Content	Successful request with no body
+400	Bad Request	Invalid client request
+401	Unauthorized	Authentication required
+403	Forbidden	Access denied
+404	Not Found	Resource doesn’t exist
+422	Validation Error	Request data doesn’t satisfy validation
+500	Internal Server Error	Unexpected server-side failure
+
+FastAPI lets us explicitly declare response status codes on path operations, and it documents them in the generated OpenAPI schema.
+
+We’ll use these codes much more extensively as the project becomes a real CRUD API.
+43. Why Status Codes Matter
+
+Imagine a frontend application calling:
+
+GET /books/999
+
+If book 999 doesn’t exist, the frontend needs to know what happened.
+
+Returning:
+
+200 OK
+
+with:
+
+{
+    "message": "Book not found"
+}
+
+makes the client guess.
+
+A better API communicates clearly:
+
+404 Not Found
+
+Now the client knows:
+
+    The request reached the server successfully, but the requested resource doesn’t exist.
+
+Good APIs communicate through both:
+
+Response Body
++
+HTTP Status Code
+
+44. API Design: Path vs Query
+
+One of the most useful decisions you will make is:
+
+    Should this information be part of the path or query string?
+
+A useful rule of thumb:
+Use a path parameter when identifying a specific resource.
+
+Example:
+
+GET /books/25
+
+Meaning:
+
+    Get book 25.
+
+Use query parameters for filtering, searching, sorting, pagination, or optional behavior.
+
+Examples:
+
+GET /books?category=software
+
+GET /books?limit=10
+
+GET /books?q=clean
+
+GET /books?sort=title
+
+This distinction will become extremely important when we design our production API.
+45. Path Parameter vs Query Parameter
+
+Think about it like this:
+
+/books/25
+       ^^
+       |
+       Specific resource
+
+versus:
+
+/books?category=software&limit=10
+       |                 |
+       |                 |
+       Filter            Pagination
+
+So:
+
+Path
+↓
+"What resource?"
+
+Query
+↓
+"How should I retrieve it?"
+
+This isn’t an absolute rule for every API design, but it’s a very useful foundation.
+46. Validation Is Already Happening
+
+Consider:
+
+limit: int = 10
+
+FastAPI knows:
+
+limit
+↓
+must be integer
+
+If a client sends:
+
+/books?limit=abc
+
+FastAPI rejects it before our function receives the value.
+
+This is important because validation is occurring at the application boundary:
+
+Client
+   ↓
+HTTP Request
+   ↓
+FastAPI Validation
+   ↓
+Valid?
+  / \
+Yes  No
+ |    |
+ v    v
+Logic Error Response
+
+This separation is a major part of building robust APIs.
+47. The Bigger Lesson: Type Annotations Are Doing Real Work
+
+When you write:
+
+book_id: int
+
+you’re not merely helping your editor.
+
+FastAPI uses that information to provide:
+
+    parsing
+    validation
+    documentation
+    type information
+    useful error responses
+
+Similarly:
+
+limit: int = 10
+
+communicates:
+
+    limit is an optional integer and defaults to 10.
+
+And:
+
+short: bool = False
+
+communicates:
+
+    short is an optional boolean and defaults to false.
+
+FastAPI’s documentation emphasizes this combination of type declarations, parsing, validation, editor support, and automatic documentation.
+
+This is one of the central ideas of FastAPI.
+48. Inspect the Automatic Documentation
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+Look at:
+
+GET /books
+
+Swagger UI should show parameters similar to:
+
+category
+skip
+limit
+short
+
+It also knows their types.
+
+For:
+
+GET /books/{book_id}
+
+it understands:
+
+book_id: integer
+
+This documentation was generated from our code.
+
+We didn’t separately create a documentation file.
+49. Why This Matters in Real Companies
+
+Imagine a team with:
+
+Backend Developers
+Frontend Developers
+Mobile Developers
+QA Engineers
+External Integrators
+
+The backend team exposes:
+
+GET /books/{book_id}
+
+and the API documentation tells everyone:
+
+book_id
+Type: integer
+Required: yes
+
+The frontend team can understand the contract without reading the backend source code.
+
+This is one reason standardized API documentation is so valuable.
+50. A Look Ahead: Validation Will Become Much Stronger
+
+Right now we have:
+
+limit: int = 10
+
+But what if we want:
+
+limit must be greater than 0
+
+and:
+
+limit cannot exceed 100
+
+FastAPI supports additional parameter validation through tools such as Query and Path, and current FastAPI documentation recommends the Annotated style where appropriate.
+
+For example, eventually we can write validation like:
+
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+
+app = FastAPI()
+
+
+@app.get("/books")
+async def list_books(
+    limit: Annotated[int, Query(gt=0, le=100)] = 10
+):
+    return {
+        "limit": limit
+    }
+
+Don’t worry if this syntax looks unfamiliar.
+
+We’ll study it properly in a dedicated validation chapter.
+51. Industry-Oriented Thinking: Don’t Validate Everything Manually
+
+A beginner might write:
+
+if limit <= 0:
+    ...
+
+then:
+
+if limit > 100:
+    ...
+
+then manually build error responses.
+
+Sometimes application-specific validation does require custom logic.
+
+But standard request validation should be declared as close to the API contract as possible.
+
+The ideal flow is:
+
+Request
+   ↓
+Schema / Parameter Validation
+   ↓
+Application Logic
+
+rather than:
+
+Request
+   ↓
+Application Logic
+   ↓
+Manually discover bad data
+   ↓
+Build error
+
+We will gradually move toward this professional approach.
+52. Our Main Tutorial Project Is Beginning
+
+At the beginning of Chapter 1, we had:
+
+FastAPI Learning Project
+
+Now we’re introducing a real domain:
+
+Book Catalog
+
+This is intentional.
+
+As we progress through the tutorial, this domain will evolve.
+
+The journey will look approximately like:
+
+Chapter 1
+   ↓
+FastAPI foundation
+
+Chapter 2
+   ↓
+Book Catalog API
+
+Chapter 3
+   ↓
+Request/response data
+
+Chapter 4
+   ↓
+Pydantic schemas
+
+Chapter 5
+   ↓
+Validation
+
+Chapter 6
+   ↓
+Project structure + routers
+
+Chapter 7
+   ↓
+Configuration
+
+Chapter 8
+   ↓
+Database
+
+Chapter 9
+   ↓
+CRUD
+
+Chapter 10+
+   ↓
+Authentication
+Authorization
+Testing
+Logging
+Security
+Deployment
+
+The exact chapter boundaries may evolve as we deepen the project, but the application itself will progressively grow.
+53. What We Intentionally Have NOT Added Yet
+
+Our Book Catalog API currently has:
+
+No database
+No authentication
+No user accounts
+No routers
+No service layer
+No repository layer
+No Pydantic response models
+No automated tests
+No Docker
+No deployment
+
+And that’s okay.
+
+We’re not trying to build everything at once.
+
+The goal is:
+
+Understand
+   ↓
+Build
+   ↓
+Refactor
+   ↓
+Improve
+   ↓
+Productionize
+
+This is how you’ll learn not only FastAPI syntax, but also how a real application evolves.
+54. Common Beginner Mistakes
+Mistake 1 — Confusing Path and Query Parameters
+
+Incorrect mental model:
+
+/books/25?category=software
+
+thinking both values are path parameters.
+
+Actually:
+
+Path parameter:
+25
+
+Query parameter:
+category=software
+
+Mistake 2 — Forgetting the Type
+
+This:
+
+book_id
+
+doesn’t tell FastAPI that the value must be an integer.
+
+This:
+
+book_id: int
+
+does.
+Mistake 3 — Making Everything a Query Parameter
+
+Don’t turn:
+
+GET /books/25
+
+into:
+
+GET /books?book_id=25
+
+without a design reason.
+
+When identifying a specific resource, the path often communicates the intent more clearly.
+Mistake 4 — No Default for Optional Parameters
+
+This:
+
+q: str
+
+means required.
+
+This:
+
+q: str | None = None
+
+means optional.
+Mistake 5 — Returning Success for Not Found
+
+Our example currently does:
+
+return {
+    "message": "Book not found"
+}
+
+We’ll fix this with proper HTTP exceptions later.
+Mistake 6 — Ignoring Pagination
+
+Returning:
+
+10,000 books
+
+in one response is usually not a good API design.
+
+Pagination becomes important when dealing with real datasets.
+55. Chapter 2 Practical Exercise
+
+Now it’s your turn to build something.
+Project: Movie Catalog API
+
+Create a new project:
+
+movie-catalog-api
+
+Do not modify the Book Catalog API for this exercise.
+
+Create a fresh project so you can practice the concepts independently.
+56. Assignment Objective
+
+Build an API that manages a fictional movie catalog using in-memory data.
+
+Your API should demonstrate:
+
+    path parameters
+    query parameters
+    optional parameters
+    default values
+    filtering
+    pagination
+    type conversion
+
+57. Required Endpoints
+
+Implement:
+
+GET /
+
+Return a welcome message.
+Get All Movies
+
+GET /movies
+
+Return the movie catalog.
+Get a Specific Movie
+
+GET /movies/{movie_id}
+
+The movie_id must be an integer.
+
+Example:
+
+/movies/10
+
+Filter by Genre
+
+Support:
+
+/movies?genre=action
+
+Search Movies
+
+Create:
+
+GET /search
+
+and support:
+
+/search?q=matrix
+
+Pagination
+
+Support:
+
+/movies?skip=0&limit=10
+
+with:
+
+skip
+
+defaulting to:
+
+0
+
+and:
+
+limit
+
+defaulting to:
+
+10
+
+58. Assignment Challenge
+
+Add:
+
+short=true
+
+For example:
+
+/movies?genre=action&short=true
+
+When short=true, return only:
+
+id
+title
+genre
+
+instead of all movie information.
+59. Advanced Challenge
+
+Create:
+
+GET /movies/{movie_id}/reviews
+
+For example:
+
+/movies/10/reviews
+
+Return a fictional list of reviews for that movie.
+
+Then add a query parameter:
+
+limit
+
+so that:
+
+/movies/10/reviews?limit=2
+
+returns only two reviews.
+60. Documentation Challenge
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+Verify that your API documentation clearly shows:
+
+GET /
+GET /movies
+GET /movies/{movie_id}
+GET /movies/{movie_id}/reviews
+GET /search
+
+Check that the path and query parameters appear automatically.
+61. Design Challenge
+
+Before writing the code, answer:
+Why is this:
+
+/movies/10
+
+better suited to a path parameter?
+
+And why is this:
+
+/movies?genre=action
+
+better suited to a query parameter?
+
+Write your answer in your own words.
+
+This isn’t just an exercise in syntax.
+
+We’re beginning to learn API design.
+62. Chapter 2 Knowledge Check
+
+Before moving to Chapter 3, make sure you can explain:
+
+    What is a route?
+    What is a path parameter?
+    What is a query parameter?
+    How do you declare a path parameter?
+    How does FastAPI know whether a parameter belongs to the path?
+    How does FastAPI know whether a parameter belongs to the query string?
+    What does book_id: int accomplish?
+    Why is a path parameter always required?
+    How do you make a query parameter optional?
+    What does q: str | None = None mean?
+    How do default query parameters work?
+    What are skip and limit commonly used for?
+    Why does route ordering matter?
+    What is the difference between 200 and 404?
+    Why are HTTP status codes important?
+    Why is returning all database records at once potentially problematic?
+    Why are we currently using in-memory data?
+    Why will we eventually replace it with a database?
+
+If you can answer these and complete the Movie Catalog assignment, you’re ready for the next major step.
+63. A Preview of the Architecture We Are Building
+
+Our current application is still small:
+
+Book Catalog API
+       |
+       +── GET /
+       |
+       +── GET /books
+       |
+       +── GET /books/{book_id}
+       |
+       +── GET /search
+
+But eventually:
+
+                    Book Catalog API
+                           |
+                    ┌──────┴──────┐
+                    ↓             ↓
+                 Routers       Middleware
+                    |
+                    ↓
+              Request Validation
+                    |
+                    ↓
+                Services
+                    |
+                    ↓
+              Repositories
+                    |
+                    ↓
+                 Database
+                    |
+                    ↓
+              Response Schemas
+                    |
+                    ↓
+                  Client
+
+We are going to build this one concept at a time.
+
+You won’t have to memorize this architecture now.
+
+Just remember:
+
+    We’re not throwing away what we build. We’re progressively improving it.
+
+64. Chapter Summary
+
+In this chapter, we moved from a simple FastAPI application to a meaningful API.
+
+We learned that:
+
+/books/25
+
+contains a path parameter.
+
+While:
+
+/books?category=software
+
+contains a query parameter.
+
+We learned how FastAPI uses type annotations such as:
+
+book_id: int
+
+to provide automatic parsing and validation.
+
+We learned how optional parameters work:
+
+q: str | None = None
+
+and how defaults work:
+
+limit: int = 10
+
+We also learned how multiple parameters can work together:
+
+/books?category=software&skip=0&limit=10&short=true
+
+And we introduced an important API design principle:
+
+Path parameter
+→ identify the resource
+
+Query parameter
+→ filter, search, paginate, or customize retrieval
+
+Finally, we created the first version of our:
+📚 Book Catalog API
+
+This application will become the foundation for the larger project we develop throughout this tutorial.

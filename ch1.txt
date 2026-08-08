@@ -1,0 +1,1428 @@
+
+Chapter 1 — Your First FastAPI Application: From Zero to a Real API
+By OTLMS / August 3, 2026
+Welcome to the FastAPI Journey
+
+Imagine that you are building an application like an online bookstore.
+
+A user searches for a book.
+
+The frontend sends a request:
+
+GET /books/42
+
+Your backend receives that request, finds the book, and returns:
+
+{
+    "id": 42,
+    "title": "Clean Architecture",
+    "author": "Robert C. Martin"
+}
+
+That communication between a frontend, mobile application, another service, or even an AI application and your backend is where APIs become important.
+
+FastAPI gives us a modern way to build those APIs.
+
+But this tutorial is not going to teach you:
+
+    “Create one file, put everything inside it, and call it a project.”
+
+Instead, we are going to learn how professional FastAPI applications are actually developed.
+
+We will begin with a tiny application.
+
+Then, chapter by chapter, we will evolve it into a complete application with:
+
+    modular architecture
+    routers
+    request validation
+    response models
+    configuration
+    dependency injection
+    database integration
+    CRUD operations
+    authentication
+    authorization
+    error handling
+    logging
+    automated tests
+    asynchronous programming
+    background tasks
+    middleware
+    security
+    Docker
+    production configuration
+    deployment
+
+By the end, the small application we create in this chapter will be the foundation for a much larger project.
+1. What You Will Learn in This Chapter
+
+By the end of this chapter, you will understand:
+
+    what FastAPI is
+    what an API actually does
+    what a web framework is
+    why FastAPI is useful
+    what uv is
+    why modern FastAPI projects use uv
+    how to create a FastAPI project
+    how pyproject.toml fits into the project
+    what uv.lock does
+    how to create your first API endpoint
+    how FastAPI maps URLs to functions
+    how to start the development server
+    how to use automatic API documentation
+    how to test an endpoint from the browser
+    how to test an endpoint using Swagger UI
+    how to structure our learning project for future growth
+
+Most importantly, you will build your first working FastAPI application.
+2. What Is FastAPI?
+
+FastAPI is a modern web framework for building APIs.
+
+It is designed around standard type annotations and provides features such as:
+
+    request validation
+    automatic API documentation
+    dependency injection
+    asynchronous request handling
+    OpenAPI support
+    JSON serialization
+    security utilities
+
+The official FastAPI documentation introduces the framework using a very small application containing a FastAPI instance and a path operation.
+
+The important idea is this:
+
+Client
+   |
+   | HTTP Request
+   v
+FastAPI Application
+   |
+   | Application Logic
+   v
+Response
+   |
+   | HTTP Response
+   v
+Client
+
+For example:
+
+Browser
+   |
+   | GET /hello
+   v
+FastAPI
+   |
+   | Execute endpoint
+   v
+{"message": "Hello"}
+
+That is the basic foundation we will build upon.
+3. Why Are We Using uv?
+
+uv is a modern project and package management tool.
+
+Instead of managing every project manually, uv can handle:
+
+    project creation
+    dependency management
+    virtual environments
+    Python versions
+    lockfiles
+    running project commands
+    dependency synchronization
+
+The official FastAPI documentation specifically recommends uv for managing FastAPI project dependencies and virtual environments.
+
+The official uv documentation also describes project management around pyproject.toml, .venv, and uv.lock.
+
+This gives us a much cleaner development workflow.
+4. The Traditional Approach vs Modern uv
+
+You may encounter older tutorials that teach a workflow involving manually creating virtual environments and installing packages individually.
+
+For this course, we will use the modern project workflow.
+
+Our goal is:
+
+Create Project
+      ↓
+Add Dependencies
+      ↓
+uv Creates/Manages Environment
+      ↓
+Run Application
+      ↓
+Lock Dependencies
+      ↓
+Develop
+      ↓
+Test
+      ↓
+Deploy
+
+The project will eventually contain files such as:
+
+fastapi-learning/
+├── .gitignore
+├── .python-version
+├── pyproject.toml
+├── uv.lock
+├── README.md
+├── app/
+│   └── ...
+└── tests/
+    └── ...
+
+We are deliberately introducing the project structure early.
+
+As the tutorial progresses, we will expand it.
+5. What Exactly Is an API?
+
+Before writing code, let’s understand what we’re building.
+
+Suppose an application has a list of books.
+
+A client might send:
+
+GET /books
+
+The server could respond:
+
+[
+    {
+        "id": 1,
+        "title": "Clean Code"
+    },
+    {
+        "id": 2,
+        "title": "Clean Architecture"
+    }
+]
+
+Another request might be:
+
+GET /books/1
+
+And the server could return:
+
+{
+    "id": 1,
+    "title": "Clean Code"
+}
+
+The API defines the communication contract.
+
+In simplified terms:
+
+HTTP Request
+      ↓
+URL + HTTP Method
+      ↓
+FastAPI Endpoint
+      ↓
+Application Logic
+      ↓
+HTTP Response
+
+FastAPI helps us implement that communication layer.
+6. Understanding HTTP Methods
+
+FastAPI works with HTTP methods.
+
+The most common methods are:
+Method	Typical Purpose
+GET	Retrieve information
+POST	Create information
+PUT	Replace information
+PATCH	Partially update information
+DELETE	Delete information
+
+For example:
+
+GET    /books
+POST   /books
+GET    /books/10
+PUT    /books/10
+PATCH  /books/10
+DELETE /books/10
+
+We will eventually implement all of these.
+
+For Chapter 1, we only need GET.
+7. Understanding a FastAPI Path Operation
+
+Consider this endpoint:
+
+GET /
+
+The / is the URL path.
+
+GET is the HTTP method.
+
+FastAPI calls this combination a path operation.
+
+Conceptually:
+
+HTTP Method + URL Path
+          ↓
+     Path Operation
+          ↓
+      Function
+
+So:
+
+GET /
+
+can be connected to a function.
+
+This is one of the most important concepts in FastAPI.
+8. Program 1 — Your First FastAPI Application
+Program Objective
+
+Our first program has a simple objective:
+
+    Build a minimal FastAPI application, start the development server, create a GET endpoint, and access it through a browser and automatically generated API documentation.
+
+We will keep the application intentionally small.
+
+But we will create it using a workflow that can grow into our larger project.
+9. Step-by-Step: Create the Project
+Step 1 — Install uv
+
+Install uv using the official installation instructions for your operating system.
+
+Official uv installation documentation
+
+After installation, verify it:
+
+uv --version
+
+You should see a version number.
+
+For example:
+
+uv 0.x.x
+
+The exact version will depend on the current release installed on your system.
+10. Step 2 — Create the Project
+
+Create a directory for our course project.
+
+uv init fastapi-learning
+
+Move into it:
+
+cd fastapi-learning
+
+The official uv project workflow uses uv init to create project metadata and a pyproject.toml file.
+11. Step 3 — Add FastAPI
+
+Now add FastAPI:
+
+uv add "fastapi[standard]"
+
+The official uv/FastAPI integration guide uses this dependency form because the standard extra provides the tools needed for the standard FastAPI development workflow.
+
+After running this command, uv updates the project configuration and resolves the dependency tree.
+12. Step 4 — Understand What uv Created
+
+Your project will now contain files similar to:
+
+fastapi-learning/
+├── .gitignore
+├── .python-version
+├── main.py
+├── pyproject.toml
+└── uv.lock
+
+Depending on the uv version and initialization options, the exact initial files may differ slightly.
+
+The important files are:
+pyproject.toml
+
+This describes the project and its declared dependencies.
+uv.lock
+
+This contains the resolved dependency information used to reproduce the environment.
+.python-version
+
+This identifies the Python version selected for the project environment.
+.venv
+
+The project environment is created and managed by uv as needed.
+
+The official uv documentation explains that the project environment and lockfile are created lazily when project commands such as uv run, uv sync, or uv lock are used.
+13. Why Is uv.lock Important?
+
+Suppose you build an application today.
+
+You install:
+
+FastAPI
+Pydantic
+Starlette
+Uvicorn
+
+Months later, someone else clones your project.
+
+If dependencies are not precisely locked, they may end up with different versions.
+
+That can produce:
+
+Developer A
+FastAPI version X
+        ↓
+Application works
+
+Developer B
+FastAPI version Y
+        ↓
+Unexpected behavior
+
+A lockfile helps solve this problem.
+
+The simplified idea is:
+
+pyproject.toml
+      ↓
+What dependencies do we need?
+
+uv.lock
+      ↓
+What exact resolved dependencies should be used?
+
+The uv documentation recommends committing the lockfile to version control for reproducible environments.
+14. Step 5 — Create the Application Directory
+
+Although our first application could technically live in one file, we’re going to start establishing a professional structure early.
+
+Create:
+
+app/
+
+Inside it, create:
+
+app/main.py
+
+Our project now becomes:
+
+fastapi-learning/
+├── app/
+│   └── main.py
+├── .gitignore
+├── .python-version
+├── pyproject.toml
+└── uv.lock
+
+This may look like extra work for a tiny application.
+
+That’s intentional.
+
+We’re learning a development approach that can grow.
+
+The official FastAPI documentation recommends separating larger applications into multiple modules and routers rather than keeping everything inside one file.
+15. Step 6 — Write the FastAPI Application
+
+Open:
+
+app/main.py
+
+Add:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the FastAPI Learning Project"}
+
+That’s our first FastAPI application.
+16. Step 7 — Understand the Code
+
+Let’s examine every part.
+Import FastAPI
+
+from fastapi import FastAPI
+
+We import the FastAPI class.
+Create the Application
+
+app = FastAPI()
+
+This creates our FastAPI application instance.
+
+Think of app as the central object to which we will register routes, middleware, configuration, and other application behavior.
+Create the Endpoint
+
+@app.get("/")
+
+This tells FastAPI:
+
+    When a client sends a GET request to /, use the function below.
+
+The important pieces are:
+
+@app
+
+The FastAPI application instance.
+
+.get()
+
+The HTTP method.
+
+"/"
+
+The URL path.
+
+Together:
+
+@app.get("/")
+
+means:
+
+GET /
+
+Define the Endpoint Function
+
+async def root():
+
+This function is executed when the endpoint receives a matching request.
+
+For now, don’t worry if async is unfamiliar.
+
+We will study asynchronous programming carefully later in the series.
+Return the Response
+
+return {"message": "Welcome to the FastAPI Learning Project"}
+
+FastAPI converts the returned dictionary into a JSON response.
+
+The client receives:
+
+{
+    "message": "Welcome to the FastAPI Learning Project"
+}
+
+17. Step 8 — Start the Application
+
+From the project root, run:
+
+uv run fastapi dev app/main.py
+
+The FastAPI documentation demonstrates the development server using uv run fastapi dev, and the uv/FastAPI integration guide uses the same modern workflow.
+
+You should see output indicating that the development server has started.
+
+The application will normally be available at:
+
+http://127.0.0.1:8000
+
+18. Step 9 — Open Your First API
+
+Open your browser and visit:
+
+http://127.0.0.1:8000/
+
+You should see:
+
+{
+    "message": "Welcome to the FastAPI Learning Project"
+}
+
+Congratulations.
+
+You have just built your first API.
+
+But FastAPI has something even more interesting waiting for you.
+19. Step 10 — Open Swagger UI
+
+Go to:
+
+http://127.0.0.1:8000/docs
+
+You should see an interactive API interface.
+
+You will see something similar to:
+
+FastAPI
+
+GET /
+    root
+
+    GET / Execute
+
+Expand the endpoint.
+
+Click:
+
+Try it out
+
+Then:
+
+Execute
+
+FastAPI sends the request and displays the response.
+
+This means we can test our API without manually writing a frontend application.
+20. Step 11 — Open ReDoc
+
+FastAPI also provides another automatically generated documentation interface.
+
+Visit:
+
+http://127.0.0.1:8000/redoc
+
+You will see another representation of the API documentation.
+
+This is powered by the OpenAPI schema generated from our FastAPI application.
+
+We will explore OpenAPI in much greater detail later.
+21. What Just Happened?
+
+Let’s visualize the request.
+
+You opened:
+
+http://127.0.0.1:8000/
+
+The browser generated:
+
+GET /
+
+The server received it:
+
+FastAPI Application
+        |
+        v
+@app.get("/")
+        |
+        v
+root()
+        |
+        v
+Dictionary
+        |
+        v
+JSON Response
+
+The response travelled back to the browser:
+
+{
+    "message": "Welcome to the FastAPI Learning Project"
+}
+
+That’s the fundamental request-response cycle.
+22. The Anatomy of Our First FastAPI Application
+
+Our application can be represented as:
+
+                    FastAPI Application
+                           |
+                           v
+                    app = FastAPI()
+                           |
+                           v
+                    Route Registration
+                           |
+                           v
+                     @app.get("/")
+                           |
+                           v
+                       root()
+                           |
+                           v
+                  JSON Response
+
+This simple structure will become much more powerful as the course progresses.
+23. What Happens When We Add More Endpoints?
+
+Suppose we add:
+
+@app.get("/about")
+async def about():
+    return {"application": "FastAPI Learning Project"}
+
+And:
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+Our application now has:
+
+GET /
+GET /about
+GET /health
+
+FastAPI knows which function should execute based on the HTTP method and URL path.
+
+Conceptually:
+
+GET /
+    ↓
+root()
+
+GET /about
+    ↓
+about()
+
+GET /health
+    ↓
+health()
+
+This is the basic routing mechanism.
+24. Program 2 — Build a Small API Status Service
+
+Now let’s make our first program slightly more realistic.
+
+We will create three endpoints:
+
+GET /
+GET /health
+GET /about
+
+This represents a miniature service that could be used as the foundation of a real backend.
+Program Objective
+
+Build a small API status service that:
+
+    identifies the application
+    provides a health endpoint
+    provides basic application information
+    demonstrates multiple GET routes
+    exposes automatic API documentation
+
+25. Step-by-Step Instructions
+Step 1 — Open the Application
+
+Open:
+
+app/main.py
+
+Step 2 — Replace the Existing Code
+
+Use:
+
+from fastapi import FastAPI
+
+
+app = FastAPI()
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to the FastAPI Learning Project"
+    }
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy"
+    }
+
+
+@app.get("/about")
+async def about():
+    return {
+        "name": "FastAPI Learning Project",
+        "version": "1.0.0",
+        "description": "Learning FastAPI with a modern project structure"
+    }
+
+26. Step 3 — Start the Development Server
+
+Run:
+
+uv run fastapi dev app/main.py
+
+27. Step 4 — Test the Root Endpoint
+
+Open:
+
+http://127.0.0.1:8000/
+
+Expected response:
+
+{
+    "message": "Welcome to the FastAPI Learning Project"
+}
+
+28. Step 5 — Test the Health Endpoint
+
+Open:
+
+http://127.0.0.1:8000/health
+
+Expected response:
+
+{
+    "status": "healthy"
+}
+
+A health endpoint is commonly useful for monitoring and deployment infrastructure.
+
+Later, our health endpoint will become more meaningful by checking application dependencies such as databases.
+29. Step 6 — Test the About Endpoint
+
+Open:
+
+http://127.0.0.1:8000/about
+
+Expected response:
+
+{
+    "name": "FastAPI Learning Project",
+    "version": "1.0.0",
+    "description": "Learning FastAPI with a modern project structure"
+}
+
+30. Step 7 — Check the Automatic Documentation
+
+Visit:
+
+http://127.0.0.1:8000/docs
+
+You should now see:
+
+GET /
+GET /health
+GET /about
+
+FastAPI has automatically discovered our routes and generated documentation.
+
+This is one of the features that makes FastAPI particularly pleasant for API development.
+31. Source Code Explanation
+
+Let’s now understand the complete source code.
+
+from fastapi import FastAPI
+
+Imports the FastAPI framework.
+
+app = FastAPI()
+
+Creates the application object.
+
+This object becomes the central application instance.
+
+@app.get("/")
+
+Registers a GET endpoint at /.
+
+async def root():
+
+Defines the function executed for that request.
+
+return {
+    "message": "Welcome to the FastAPI Learning Project"
+}
+
+Returns JSON-compatible data.
+
+The health endpoint:
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy"
+    }
+
+is useful because external systems can later call it to determine whether the application is functioning.
+
+For example:
+
+Load Balancer
+      |
+      v
+GET /health
+      |
+      v
+FastAPI
+      |
+      v
+healthy
+
+Later in this course, we’ll build this into a proper application health-check mechanism.
+
+The final endpoint:
+
+@app.get("/about")
+async def about():
+
+provides basic application metadata.
+
+It demonstrates an important principle:
+
+    A route is simply an HTTP method + path connected to application logic.
+
+32. Why Are We Not Putting Everything in main.py?
+
+At this stage, it is tempting to put everything here:
+
+main.py
+
+For a three-route application, that seems perfectly reasonable.
+
+But imagine that six months from now the application contains:
+
+50 API endpoints
+20 database models
+15 schemas
+authentication
+authorization
+email
+payments
+background jobs
+logging
+configuration
+tests
+external APIs
+
+Putting everything into:
+
+main.py
+
+would create a maintenance problem.
+
+That’s why we are establishing a scalable structure from the beginning.
+
+The FastAPI documentation explicitly demonstrates organizing larger applications across modules and routers.
+
+We will progressively introduce that architecture rather than overwhelming a beginner with it on day one.
+33. Our Project Will Grow Chapter by Chapter
+
+At the moment:
+
+fastapi-learning/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+Soon it will evolve toward something like:
+
+fastapi-learning/
+├── app/
+│   ├── main.py
+│   ├── core/
+│   ├── api/
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   ├── repositories/
+│   └── database/
+│
+├── tests/
+│
+├── pyproject.toml
+├── uv.lock
+└── README.md
+
+And eventually, our architecture will look much closer to an industry application.
+
+We will not introduce every directory immediately.
+
+Instead:
+
+Chapter 1
+    ↓
+Simple application
+
+Chapter 2
+    ↓
+Routes and HTTP concepts
+
+Chapter 3
+    ↓
+Parameters
+
+Chapter 4
+    ↓
+Validation and schemas
+
+Chapter 5
+    ↓
+Modular routers
+
+Chapter 6
+    ↓
+Configuration
+
+Chapter 7
+    ↓
+Dependencies
+
+Chapter 8+
+    ↓
+Database + CRUD + authentication + testing + production
+
+This gradual evolution is intentional.
+34. A Very Important Development Principle
+
+Throughout this course, we will distinguish between:
+Learning code
+
+Code designed primarily to demonstrate one concept.
+
+and:
+Application code
+
+Code designed to survive inside a maintainable project.
+
+For example, this is excellent for learning routing:
+
+@app.get("/books")
+async def books():
+    return {"message": "Books"}
+
+But a production application shouldn’t keep every concern inside one file.
+
+Eventually, we want something closer to:
+
+Request
+   ↓
+Router
+   ↓
+Schema Validation
+   ↓
+Service
+   ↓
+Repository
+   ↓
+Database
+   ↓
+Response Schema
+   ↓
+Client
+
+You will learn how to build that architecture gradually.
+35. Development Environment vs Production Environment
+
+You will frequently see:
+
+uv run fastapi dev
+
+during development.
+
+This is a development-oriented command.
+
+It is designed to make development convenient, including automatic reload behavior.
+
+Later, we will learn the distinction between:
+
+Development
+
+and:
+
+Production
+
+including:
+
+    production server execution
+    Docker
+    environment variables
+    secrets
+    process management
+    health checks
+    logging
+    deployment
+    observability
+
+Do not deploy your learning server configuration blindly to production.
+
+We’ll build the production workflow later.
+36. Important uv Commands to Remember
+
+You don’t need to memorize everything yet.
+
+For now, learn these:
+Create a project
+
+uv init
+
+Add a dependency
+
+uv add package-name
+
+Remove a dependency
+
+uv remove package-name
+
+Run a command inside the project environment
+
+uv run command
+
+Synchronize the environment
+
+uv sync
+
+Update the lockfile
+
+uv lock
+
+The official uv CLI documentation provides the complete command reference for these project-management operations.
+37. The Modern FastAPI Workflow
+
+For this course, keep this mental model:
+
+Create Project
+      ↓
+uv init
+      ↓
+Add Dependencies
+      ↓
+uv add
+      ↓
+Write Application
+      ↓
+Run with uv
+      ↓
+Test API
+      ↓
+Commit pyproject.toml + uv.lock
+
+Later:
+
+Development
+      ↓
+Testing
+      ↓
+Quality Checks
+      ↓
+Build
+      ↓
+Container
+      ↓
+Deployment
+
+This is much closer to how we want to approach professional application development.
+38. Common Beginner Mistakes
+Mistake 1 — Forgetting the HTTP method
+
+These are different:
+
+GET /books
+
+and:
+
+POST /books
+
+We’ll explore this carefully in the next chapters.
+Mistake 2 — Wrong URL
+
+If your endpoint is:
+
+@app.get("/health")
+
+you need:
+
+/health
+
+not:
+
+/healthy
+
+unless you explicitly define that route.
+Mistake 3 — Running from the wrong directory
+
+Run the application from the project root:
+
+fastapi-learning/
+
+and use:
+
+uv run fastapi dev app/main.py
+
+Mistake 4 — Installing dependencies globally
+
+Avoid building your course project around globally installed packages.
+
+Our project should manage its own environment using uv.
+Mistake 5 — Treating the development server as production infrastructure
+
+The development workflow is optimized for development.
+
+Production deployment will be covered separately.
+39. FastAPI’s Automatic Documentation Is More Than a Convenience
+
+One of the first things you may notice is:
+
+/docs
+
+But don’t think of this merely as a nice UI.
+
+FastAPI generates an OpenAPI description of your API.
+
+That means your API can have a machine-readable contract.
+
+Conceptually:
+
+FastAPI Code
+     |
+     v
+OpenAPI Schema
+     |
+     +--------> Swagger UI
+     |
+     +--------> ReDoc
+     |
+     +--------> API tooling
+
+This becomes increasingly valuable as our application grows.
+
+Later, when we add request models, validation, authentication, and response models, the generated documentation will become much more powerful.
+40. What We Have Built
+
+Our first application now contains:
+
+GET /
+GET /health
+GET /about
+
+We also have:
+
+/docs
+/redoc
+
+And our project uses:
+
+uv
+pyproject.toml
+uv.lock
+FastAPI
+
+Most importantly, we’ve established the foundation for the complete project that will evolve throughout the tutorial.
+41. Chapter 1 Key Concepts
+
+Remember these concepts:
+FastAPI
+
+A framework for building APIs.
+FastAPI()
+
+Creates the application instance.
+Path operation
+
+A combination of HTTP method and URL path.
+
+Example:
+
+GET /
+
+Decorator
+
+This:
+
+@app.get("/")
+
+registers a route.
+Endpoint function
+
+The function executed when a request matches the route.
+JSON response
+
+FastAPI can convert returned Python data structures into JSON responses.
+uv
+
+Our project and dependency management tool.
+pyproject.toml
+
+Project metadata and dependency declaration.
+uv.lock
+
+Resolved dependency lockfile for reproducible environments.
+/docs
+
+Interactive API documentation.
+/redoc
+
+Alternative generated API documentation.
+42. Chapter 1 Practice Assignment
+Project: Personal Profile API
+
+Now it’s your turn.
+
+Build a small API called:
+
+Personal Profile API
+
+Do not copy the exact examples from this chapter.
+
+The goal is to make you think about routes and API design.
+Assignment Objective
+
+Create an API that exposes information about a fictional person.
+
+Your API should have at least these endpoints:
+
+GET /
+GET /profile
+GET /skills
+GET /contact
+
+Requirements
+Endpoint 1 — /
+
+Return a welcome message.
+
+Example shape:
+
+{
+    "message": "..."
+}
+
+Use your own message.
+Endpoint 2 — /profile
+
+Return information such as:
+
+{
+    "name": "...",
+    "role": "...",
+    "experience": "...",
+    "location": "..."
+}
+
+Use fictional information if desired.
+Endpoint 3 — /skills
+
+Return several skills.
+
+For example:
+
+{
+    "skills": [
+        "...",
+        "...",
+        "..."
+    ]
+}
+
+Choose your own skills.
+Endpoint 4 — /contact
+
+Return fictional contact information.
+
+For example:
+
+{
+    "email": "...",
+    "website": "..."
+}
+
+Do not use real sensitive information.
+43. Assignment Development Requirements
+
+Use the project structure:
+
+personal-profile-api/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+Create the project with uv.
+
+Add FastAPI as a dependency.
+
+Run the application using the modern uv workflow.
+
+Verify all four endpoints.
+
+Then open:
+
+/docs
+
+and confirm that all four endpoints appear.
+44. Assignment Challenge
+
+After completing the basic assignment, add:
+
+GET /status
+
+Return:
+
+{
+    "status": "online"
+}
+
+Then add one more endpoint of your own design.
+
+For example:
+
+GET /hobbies
+
+or:
+
+GET /projects
+
+or:
+
+GET /education
+
+The important part is that you design the endpoint yourself.
+45. Think Like an API Developer
+
+Before moving to Chapter 2, answer these questions yourself:
+
+    What is an API?
+    What is a path operation?
+    What is the difference between a URL path and an HTTP method?
+    What does @app.get("/") do?
+    What is the purpose of pyproject.toml?
+    Why do we have uv.lock?
+    Why are we using uv?
+    What is /docs?
+    What is /redoc?
+    Why shouldn’t a growing application keep everything inside one file?
+
+If you can answer these questions and build the assignment without copying the chapter, you are ready for the next step.
+46. What’s Coming Next?
+
+Right now our API is extremely simple.
+
+It can answer:
+
+GET /
+GET /health
+GET /about
+
+But real APIs need to receive information.
+
+For example:
+
+GET /books/25
+
+How do we extract:
+
+25
+
+from the URL?
+
+And what if we want:
+
+GET /books?category=programming
+
+How do we read:
+
+category=programming
+
+from the request?
+
+And what if a client sends:
+
+POST /books
+
+with JSON data?
+
+That’s where our API starts becoming truly interesting.

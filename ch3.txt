@@ -1,0 +1,2978 @@
+
+Chapter 3 — From Reading Data to Creating Data: Request Bodies & Pydantic Models
+By OTLMS / August 3, 2026
+Welcome to Chapter 3
+
+In the previous chapter, our Book Catalog API learned how to receive information through URLs.
+
+We could do things like:
+
+GET /books/2
+
+or:
+
+GET /books?category=software&limit=10
+
+We learned:
+
+    routes
+    path parameters
+    query parameters
+    optional parameters
+    default values
+    filtering
+    pagination
+    basic API design
+
+But there is a major limitation.
+
+Our application can read books.
+
+It cannot create one.
+
+Imagine that a user opens a bookstore application and fills out a form:
+
+Title: FastAPI in Practice
+Author: Jane Developer
+Category: Software
+Year: 2026
+Price: 49.99
+
+The frontend needs to send that information to our API.
+
+How?
+
+The client might send:
+
+POST /books
+
+with a request body:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+Now we have a completely new concept:
+Request Body
+
+And this chapter introduces one of the most important concepts in FastAPI development:
+Pydantic Models
+
+FastAPI uses Pydantic models to declare structured request bodies and automatically perform parsing, validation, editor support, JSON Schema generation, and OpenAPI documentation.
+
+By the end of this chapter, our Book Catalog API will be able to:
+
+CREATE
+READ
+
+That means we’re moving from:
+
+"API that displays data"
+
+toward:
+
+"API that manages data"
+
+And we’re only getting started.
+1. What You Will Learn
+
+By the end of this chapter, you will understand:
+
+    request bodies
+    JSON request data
+    POST requests
+    Pydantic
+    BaseModel
+    model fields
+    required fields
+    optional fields
+    default values
+    nested data
+    request validation
+    automatic validation errors
+    combining path parameters and request bodies
+    combining query parameters and request bodies
+    Field
+    field constraints
+    response models
+    response_model
+    HTTP 201 Created
+    status
+    model serialization
+    model_dump()
+    input vs output models
+    why request and response models should eventually be separated
+
+Most importantly, you will build:
+📚 Book Catalog API v2
+
+Our project will now support:
+
+GET  /books
+GET  /books/{book_id}
+POST /books
+
+2. What Is a Request Body?
+
+A request body is data sent by the client to the server as part of an HTTP request.
+
+For example:
+
+POST /books
+
+The client can send:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+The server receives that data.
+
+Conceptually:
+
+Client
+   |
+   | POST /books
+   |
+   | JSON Body
+   v
+FastAPI
+   |
+   | Validate
+   v
+Application Logic
+   |
+   v
+Response
+
+FastAPI’s documentation recommends Pydantic models for declaring request bodies.
+3. Request Body vs Path Parameter vs Query Parameter
+
+We now have three different places where information can arrive.
+
+Consider:
+
+POST /books/25?notify=true
+
+with:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer"
+}
+
+We can conceptually divide the request into:
+
+Path
+----
+25
+
+Query
+-----
+notify=true
+
+Body
+----
+{
+    "title": "...",
+    "author": "..."
+}
+
+FastAPI can distinguish these automatically.
+
+The official documentation explains that:
+
+    parameters appearing in the path are path parameters
+    simple singular types such as int, str, and bool are interpreted as query parameters
+    Pydantic model parameters are interpreted as request bodies.
+
+This gives us a very powerful request-handling system.
+4. Why Not Just Use Dictionaries?
+
+A beginner might ask:
+
+    Why don’t we simply accept a dictionary?
+
+We could.
+
+But consider this request:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "year": "hello",
+    "price": "expensive"
+}
+
+Our application expects:
+
+year → integer
+price → number
+
+A dictionary doesn’t give us a clean declaration of the expected structure.
+
+We want to define a contract.
+
+Something like:
+
+BookCreate
+
+title     → string
+author    → string
+category  → string
+year      → integer
+price     → number
+
+This is exactly where a Pydantic model becomes valuable.
+5. What Is Pydantic?
+
+Pydantic is a data validation and parsing library.
+
+FastAPI integrates with it extensively.
+
+A Pydantic model lets us describe the expected shape of data.
+
+Conceptually:
+
+Incoming JSON
+      |
+      v
+Pydantic Model
+      |
+      +---- Valid ----> Application
+      |
+      +---- Invalid --> Validation Error
+
+This means validation happens at the application boundary.
+
+That’s a very important architectural principle.
+6. Your First Pydantic Model
+
+Let’s create a simple model.
+
+from pydantic import BaseModel
+
+
+class Book(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+We have declared:
+
+Book
+ |
+ +-- title     → string
+ +-- author    → string
+ +-- category  → string
+ +-- year      → integer
+ +-- price     → number
+
+This is our data contract.
+7. Understanding BaseModel
+
+This line:
+
+class Book(BaseModel):
+
+creates a Pydantic model.
+
+BaseModel provides the foundation for:
+
+    validation
+    parsing
+    serialization
+    schema generation
+    editor support
+
+The official FastAPI request-body documentation uses BaseModel as the foundation for request models.
+8. Required Fields
+
+Consider:
+
+class Book(BaseModel):
+    title: str
+    author: str
+    year: int
+
+All three fields are required.
+
+This is valid:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "year": 2026
+}
+
+But this is missing author:
+
+{
+    "title": "FastAPI in Practice",
+    "year": 2026
+}
+
+FastAPI/Pydantic will reject it.
+
+We don’t need to manually write:
+
+if "author" not in data:
+
+The model declaration expresses the requirement.
+9. Optional Fields
+
+Suppose our book description is optional.
+
+We can write:
+
+from pydantic import BaseModel
+
+
+class Book(BaseModel):
+    title: str
+    author: str
+    description: str | None = None
+    year: int
+    price: float
+
+Now:
+
+description
+
+can be omitted.
+
+For example:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "year": 2026,
+    "price": 49.99
+}
+
+is valid.
+
+The default is:
+
+None
+
+10. Optional Does Not Mean “Anything Goes”
+
+Consider:
+
+description: str | None = None
+
+This means:
+
+description
+    |
+    +---- string
+    |
+    +---- None
+
+It does not mean:
+
+integer
+object
+list
+boolean
+
+can all be accepted.
+
+The type declaration still defines the expected data.
+11. Program 1 — Create Your First POST Endpoint
+Program Objective
+
+Build a small API that accepts a book through a POST request and returns the validated book data.
+
+We want to learn:
+
+    Pydantic models
+    request bodies
+    POST requests
+    automatic validation
+    Swagger UI request-body testing
+
+12. Step-by-Step Instructions
+Step 1 — Create a New Project
+
+Create:
+
+uv init request-body-demo
+
+Move into it:
+
+cd request-body-demo
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+Create:
+
+app/main.py
+
+Project structure:
+
+request-body-demo/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+13. Step 2 — Create the Model
+
+Open:
+
+app/main.py
+
+Add:
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+
+class Book(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+
+app = FastAPI()
+
+
+@app.post("/books")
+async def create_book(book: Book):
+    return book
+
+14. Step 3 — Start the Application
+
+Run:
+
+uv run fastapi dev app/main.py
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+You should see:
+
+POST /books
+
+Expand it.
+
+Click:
+
+Try it out
+
+Swagger UI should display a request body similar to:
+
+{
+    "title": "string",
+    "author": "string",
+    "category": "string",
+    "year": 0,
+    "price": 0
+}
+
+FastAPI generated this documentation from our Pydantic model and included the model schema in the OpenAPI documentation.
+15. Step 4 — Send a Valid Request
+
+Use:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+Click:
+
+Execute
+
+The API should return the validated data.
+
+Conceptually:
+
+JSON
+ ↓
+Book Model
+ ↓
+Validation
+ ↓
+create_book()
+ ↓
+Response
+
+16. Step 5 — Send Invalid Data
+
+Try:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": "hello",
+    "price": 49.99
+}
+
+The request should fail validation because:
+
+year
+
+is expected to be an integer.
+
+Try removing:
+
+author
+
+The request should also fail because author is required.
+
+This is automatic request validation.
+17. Source Code Explanation
+
+Let’s examine:
+
+class Book(BaseModel):
+
+This declares the expected structure.
+
+Then:
+
+title: str
+
+means:
+
+title must be a string
+
+Likewise:
+
+year: int
+
+means:
+
+year must be an integer
+
+and:
+
+price: float
+
+means:
+
+price must be numeric
+
+18. The Most Important Line
+
+This line:
+
+async def create_book(book: Book):
+
+does a lot of work.
+
+FastAPI sees:
+
+Book
+
+and understands that this parameter should come from the request body.
+
+The incoming JSON is parsed and validated against the model before our endpoint function receives it.
+
+Conceptually:
+
+Request Body
+     |
+     v
+{
+    "title": "...",
+    "author": "...",
+    "year": 2026
+}
+     |
+     v
+Book
+     |
+     v
+Validated Object
+     |
+     v
+create_book(book)
+
+19. Why This Is Better Than Manual Validation
+
+Without a model, we’d potentially need to manually check:
+
+Does title exist?
+Is title a string?
+Does author exist?
+Is author a string?
+Does year exist?
+Is year numeric?
+Is price present?
+Is price numeric?
+
+With a model:
+
+class Book(BaseModel):
+    title: str
+    author: str
+    year: int
+    price: float
+
+the declaration communicates the contract.
+
+This is one of the central ideas behind FastAPI.
+20. Program 2 — Create a Better Book Model
+
+Our first model works, but a real application needs more useful fields.
+
+Let’s create:
+
+BookCreate
+
+instead of simply:
+
+Book
+
+Why?
+
+Because later we’ll have different representations of a book.
+
+For example:
+
+BookCreate
+BookUpdate
+BookResponse
+BookInDatabase
+
+They may contain different fields.
+
+This is our first introduction to a professional API architecture principle:
+
+    Don’t assume one model should represent every stage of your data lifecycle.
+
+21. Program Objective
+
+Create a Book Catalog API that accepts new books using a dedicated request model.
+
+The request should contain:
+
+title
+author
+category
+year
+price
+description
+
+We will also introduce:
+
+    optional fields
+    default values
+    model serialization
+    HTTP 201 Created
+
+FastAPI allows the response status code to be declared directly on the path operation using status_code.
+22. Step-by-Step Instructions
+Step 1 — Create the Project
+
+uv init book-create-api
+
+Then:
+
+cd book-create-api
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+Create:
+
+app/main.py
+
+23. Step 2 — Define the Request Model
+
+Add:
+
+from pydantic import BaseModel
+
+
+class BookCreate(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+    description: str | None = None
+
+Notice:
+
+description: str | None = None
+
+The description is optional.
+24. Step 3 — Create the Endpoint
+
+Add:
+
+from fastapi import FastAPI, status
+from pydantic import BaseModel
+
+
+class BookCreate(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+    description: str | None = None
+
+
+app = FastAPI()
+
+
+@app.post("/books", status_code=status.HTTP_201_CREATED)
+async def create_book(book: BookCreate):
+    return book
+
+25. Step 4 — Run the Application
+
+uv run fastapi dev app/main.py
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+26. Step 5 — Create a Book
+
+Send:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99,
+    "description": "A practical FastAPI learning book."
+}
+
+The response status should be:
+
+201 Created
+
+Why?
+
+Because we explicitly declared:
+
+status_code=status.HTTP_201_CREATED
+
+The FastAPI documentation recommends using 201 Created for successful resource creation.
+27. Why Use status.HTTP_201_CREATED?
+
+We could write:
+
+status_code=201
+
+But:
+
+status_code=status.HTTP_201_CREATED
+
+is often more readable.
+
+Compare:
+
+201
+
+with:
+
+HTTP_201_CREATED
+
+The second version communicates the meaning directly.
+
+This becomes especially useful when a codebase contains many different response statuses.
+28. model_dump()
+
+A Pydantic model isn’t simply a raw dictionary.
+
+We can convert its data into a dictionary using:
+
+book.model_dump()
+
+For example:
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+
+class BookCreate(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+
+app = FastAPI()
+
+
+@app.post("/books")
+async def create_book(book: BookCreate):
+    book_data = book.model_dump()
+
+    return {
+        "message": "Book received",
+        "book": book_data
+    }
+
+A request such as:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+produces a response containing the book data.
+29. Why Do We Need model_dump()?
+
+Because later, our application will need to pass model data to other layers.
+
+For example:
+
+Request
+   ↓
+Pydantic Model
+   ↓
+Service Layer
+   ↓
+Repository
+   ↓
+Database
+
+The model may need to be converted into a dictionary or another representation before persistence.
+
+We’ll use this technique extensively once we introduce a database.
+30. Combining Path Parameters and Request Bodies
+
+Now let’s make our API more realistic.
+
+Suppose we have:
+
+PUT /books/25
+
+and the body:
+
+{
+    "title": "Updated Book Title",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 59.99
+}
+
+There are two different types of information:
+
+Path
+----
+book_id = 25
+
+Body
+----
+Book information
+
+FastAPI can handle both at the same time. The official documentation explicitly demonstrates combining request bodies with path parameters.
+31. Program 3 — Update a Book
+Program Objective
+
+Create an endpoint that receives:
+
+    a book ID through the URL
+    book information through the request body
+
+32. Step-by-Step Instructions
+
+Create:
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+
+class BookUpdate(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+
+app = FastAPI()
+
+
+@app.put("/books/{book_id}")
+async def update_book(book_id: int, book: BookUpdate):
+    return {
+        "book_id": book_id,
+        "book": book.model_dump()
+    }
+
+Run:
+
+uv run fastapi dev app/main.py
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+Test:
+
+PUT /books/25
+
+with:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 59.99
+}
+
+Response:
+
+{
+    "book_id": 25,
+    "book": {
+        "title": "FastAPI in Practice",
+        "author": "Jane Developer",
+        "category": "software",
+        "year": 2026,
+        "price": 59.99
+    }
+}
+
+33. How FastAPI Knows Where Each Value Comes From
+
+Look at:
+
+async def update_book(book_id: int, book: BookUpdate):
+
+FastAPI sees:
+
+book_id: int
+
+and notices that:
+
+book_id
+
+appears in:
+
+/books/{book_id}
+
+Therefore:
+
+book_id
+
+comes from the path.
+
+Then it sees:
+
+book: BookUpdate
+
+and recognizes the Pydantic model as a request body.
+
+So:
+
+PUT /books/25
+
+plus:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 59.99
+}
+
+becomes:
+
+book_id = 25
+
+book = BookUpdate(...)
+
+This automatic classification is a major FastAPI feature.
+34. Combining Path + Query + Body
+
+We can go one step further.
+
+Suppose:
+
+PUT /books/25?notify=true
+
+with:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 59.99
+}
+
+We can define:
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+
+class BookUpdate(BaseModel):
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+
+app = FastAPI()
+
+
+@app.put("/books/{book_id}")
+async def update_book(
+    book_id: int,
+    book: BookUpdate,
+    notify: bool = False
+):
+    return {
+        "book_id": book_id,
+        "notify": notify,
+        "book": book.model_dump()
+    }
+
+FastAPI understands:
+
+book_id
+   ↓
+Path
+
+notify
+   ↓
+Query
+
+book
+   ↓
+Request Body
+
+This exact combination is supported by FastAPI’s request-body system.
+35. Why This Separation Is So Useful
+
+Consider this request:
+
+PUT /books/25?notify=true
+
+The three locations have different meanings.
+
+Path
+----
+Which resource?
+
+Query
+-----
+What additional behavior?
+
+Body
+----
+What data should be submitted?
+
+This is a very useful mental model.
+36. Adding Validation with Field
+
+So far we’ve declared:
+
+price: float
+
+But is every number valid?
+
+No.
+
+These values don’t make sense:
+
+price = -100
+price = 0
+
+Suppose we want:
+
+price > 0
+
+We can use Pydantic’s Field.
+
+The FastAPI documentation describes Field as the way to add validation and metadata to Pydantic model fields.
+37. Program 4 — Validate Book Data
+Program Objective
+
+Improve the Book model by adding validation constraints.
+
+We want:
+
+title
+    at least 2 characters
+
+author
+    at least 2 characters
+
+year
+    between 1000 and 2100
+
+price
+    greater than 0
+
+description
+    maximum 500 characters
+
+38. Step-by-Step Instructions
+
+Use:
+
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+
+class BookCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    author: str = Field(min_length=2, max_length=100)
+    category: str = Field(min_length=2, max_length=50)
+    year: int = Field(ge=1000, le=2100)
+    price: float = Field(gt=0)
+    description: str | None = Field(
+        default=None,
+        max_length=500
+    )
+
+
+app = FastAPI()
+
+
+@app.post("/books")
+async def create_book(book: BookCreate):
+    return book
+
+39. Understanding the Constraints
+
+This:
+
+Field(min_length=2, max_length=200)
+
+means:
+
+minimum length = 2
+maximum length = 200
+
+This:
+
+Field(ge=1000, le=2100)
+
+means:
+
+greater than or equal to 1000
+less than or equal to 2100
+
+And:
+
+Field(gt=0)
+
+means:
+
+greater than 0
+
+These constraints are validated automatically.
+40. Test Invalid Data
+
+Try:
+
+{
+    "title": "A",
+    "author": "J",
+    "category": "x",
+    "year": 500,
+    "price": -10,
+    "description": "A valid description"
+}
+
+Several validation rules are violated.
+
+FastAPI will produce a structured validation response identifying the invalid fields.
+
+This is much better than silently accepting bad data.
+41. Why Validation Belongs at the API Boundary
+
+Think about the architecture:
+
+External Client
+      |
+      v
+--------------------
+API Boundary
+--------------------
+      |
+      v
+Validation
+      |
+      v
+Application Logic
+      |
+      v
+Database
+
+We don’t want invalid data entering deeper layers.
+
+For example:
+
+Client
+  |
+  | year = "hello"
+  v
+API
+  |
+  X
+Rejected
+
+rather than:
+
+Client
+  |
+  v
+Service
+  |
+  v
+Repository
+  |
+  v
+Database
+  |
+  X
+Unexpected error
+
+Early validation makes systems easier to reason about.
+42. Validation Is Also Documentation
+
+The following:
+
+year: int = Field(ge=1000, le=2100)
+
+doesn’t just validate input.
+
+It also tells API consumers:
+
+year
+Type: integer
+Minimum: 1000
+Maximum: 2100
+
+FastAPI incorporates these model constraints into the generated OpenAPI schema and interactive documentation.
+
+This means:
+
+One declaration
+      ↓
+Validation
+      +
+Documentation
+      +
+Editor support
+      +
+Schema
+
+That’s a powerful design pattern.
+43. Response Models
+
+We’ve focused on request bodies.
+
+Now let’s look at the other side:
+Response Models
+
+Suppose our endpoint returns:
+
+{
+    "id": 1,
+    "title": "Clean Code",
+    "author": "Robert C. Martin",
+    "price": 45.0
+}
+
+We want to define what the client is allowed to receive.
+
+We can create:
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    price: float
+
+Then:
+
+@app.get("/books/{book_id}", response_model=BookResponse)
+
+tells FastAPI that the response should conform to this model.
+
+FastAPI uses response models for documentation, validation, serialization, and filtering output fields. The output filtering is especially important when sensitive internal data must not be exposed.
+44. Why Response Models Matter
+
+Imagine our internal book data contains:
+
+id
+title
+author
+price
+internal_cost
+supplier_id
+admin_notes
+
+We don’t want the client to receive:
+
+internal_cost
+supplier_id
+admin_notes
+
+We can define:
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    price: float
+
+and use:
+
+response_model=BookResponse
+
+Now our API explicitly controls the public representation.
+
+This is a major step toward production-quality API design.
+45. Program 5 — Request Model + Response Model
+Program Objective
+
+Create separate models for:
+
+Input
+Output
+
+and use response_model to control what clients receive.
+46. Step-by-Step Instructions
+
+Use:
+
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+
+class BookCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    author: str = Field(min_length=2, max_length=100)
+    category: str = Field(min_length=2, max_length=50)
+    year: int = Field(ge=1000, le=2100)
+    price: float = Field(gt=0)
+
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+
+
+app = FastAPI()
+
+
+@app.post(
+    "/books",
+    response_model=BookResponse
+)
+async def create_book(book: BookCreate):
+    return {
+        "id": 1,
+        **book.model_dump()
+    }
+
+47. Test the Endpoint
+
+Send:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+The response should be:
+
+{
+    "id": 1,
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+The response model tells FastAPI what the output contract should look like.
+48. Input Model vs Output Model
+
+This distinction is extremely important.
+
+We have:
+
+BookCreate
+
+for incoming data.
+
+And:
+
+BookResponse
+
+for outgoing data.
+
+Conceptually:
+
+Client
+   |
+   | BookCreate
+   v
+FastAPI
+   |
+   v
+Application
+   |
+   v
+BookResponse
+   |
+   v
+Client
+
+This separation gives us flexibility.
+49. Why Not Use One Book Model for Everything?
+
+You might ask:
+
+    Why not create one model called Book?
+
+We could for simple examples.
+
+But real applications often have different representations.
+
+For example:
+Creation
+
+BookCreate
+
+might contain:
+
+title
+author
+category
+year
+price
+
+Database representation
+
+BookRecord
+
+might contain:
+
+id
+title
+author
+category
+year
+price
+created_at
+updated_at
+
+Public response
+
+BookResponse
+
+might contain:
+
+id
+title
+author
+category
+year
+price
+
+Update
+
+BookUpdate
+
+might contain optional fields.
+
+These models serve different purposes.
+
+This separation becomes extremely valuable when our application grows.
+50. A Security Lesson
+
+Imagine our internal model contains:
+
+password_hash
+
+If we accidentally return the internal model directly, we could expose sensitive information.
+
+Response models help establish a boundary:
+
+Internal Data
+     |
+     | Filter
+     v
+Public Response Model
+     |
+     v
+Client
+
+FastAPI’s response model system specifically filters output according to the declared response shape, which is an important security benefit.
+
+This is one reason response models are not merely documentation decoration.
+51. Program 6 — Build Book Catalog API v2
+
+Now we’re ready to combine everything we’ve learned.
+Program Objective
+
+Upgrade our Book Catalog API so that it can:
+
+    list books
+    retrieve one book
+    create a book
+    validate incoming data
+    return structured responses
+    use correct HTTP status codes
+    separate request and response models
+    support query filtering
+    support pagination
+
+We will still use in-memory data.
+
+The database comes later.
+52. Step 1 — Create the Project
+
+Create:
+
+uv init book-catalog-api-v2
+
+Move into it:
+
+cd book-catalog-api-v2
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+Create:
+
+app/main.py
+
+53. Step 2 — Define the Models
+
+Start with:
+
+from fastapi import FastAPI, status
+from pydantic import BaseModel, Field
+
+
+class BookCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    author: str = Field(min_length=2, max_length=100)
+    category: str = Field(min_length=2, max_length=50)
+    year: int = Field(ge=1000, le=2100)
+    price: float = Field(gt=0)
+    description: str | None = Field(
+        default=None,
+        max_length=500
+    )
+
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+    description: str | None = None
+
+We now have:
+
+BookCreate
+    ↓
+Client → API
+
+BookResponse
+    ↓
+API → Client
+
+54. Step 3 — Create the Application
+
+Add:
+
+app = FastAPI()
+
+55. Step 4 — Create Sample Data
+
+Add:
+
+books = [
+    {
+        "id": 1,
+        "title": "Clean Code",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2008,
+        "price": 45.00,
+        "description": "A practical guide to writing readable and maintainable code."
+    },
+    {
+        "id": 2,
+        "title": "Clean Architecture",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2017,
+        "price": 49.00,
+        "description": "A guide to designing maintainable software systems."
+    },
+    {
+        "id": 3,
+        "title": "Designing Data-Intensive Applications",
+        "author": "Martin Kleppmann",
+        "category": "database",
+        "year": 2017,
+        "price": 55.00,
+        "description": "A detailed guide to data systems and distributed applications."
+    }
+]
+
+56. Step 5 — Add the Root Endpoint
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to the Book Catalog API"
+    }
+
+57. Step 6 — Add the List Endpoint
+
+Use a response model:
+
+@app.get(
+    "/books",
+    response_model=list[BookResponse]
+)
+async def list_books():
+    return books
+
+This means the API promises to return:
+
+list[BookResponse]
+
+The generated documentation will also reflect that response schema.
+58. Step 7 — Add Filtering and Pagination
+
+Now expand the endpoint:
+
+@app.get(
+    "/books",
+    response_model=list[BookResponse]
+)
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10
+):
+    filtered_books = books
+
+    if category is not None:
+        filtered_books = [
+            book
+            for book in books
+            if book["category"].lower() == category.lower()
+        ]
+
+    return filtered_books[skip:skip + limit]
+
+Now we have:
+
+GET /books
+
+GET /books?category=software
+
+GET /books?skip=1&limit=2
+
+59. Step 8 — Add the Single-Book Endpoint
+
+Add:
+
+@app.get(
+    "/books/{book_id}",
+    response_model=BookResponse
+)
+async def get_book(book_id: int):
+    for book in books:
+        if book["id"] == book_id:
+            return book
+
+    return {
+        "id": 0,
+        "title": "Not Found",
+        "author": "Unknown",
+        "category": "unknown",
+        "year": 2000,
+        "price": 0,
+        "description": None
+    }
+
+This works as a demonstration, but there is a problem.
+
+We’re returning fake data when the book doesn’t exist.
+
+We will correct this in the next chapter when we introduce proper exception handling.
+
+For now, the focus is request and response models.
+60. Step 9 — Add the Create Endpoint
+
+Now comes the most important endpoint in this chapter.
+
+@app.post(
+    "/books",
+    response_model=BookResponse,
+    status_code=status.HTTP_201_CREATED
+)
+async def create_book(book: BookCreate):
+    new_book = {
+        "id": len(books) + 1,
+        **book.model_dump()
+    }
+
+    books.append(new_book)
+
+    return new_book
+
+This is our first actual create operation.
+61. The Complete Book Catalog API v2
+
+Our complete application now looks like:
+
+from fastapi import FastAPI, status
+from pydantic import BaseModel, Field
+
+
+class BookCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    author: str = Field(min_length=2, max_length=100)
+    category: str = Field(min_length=2, max_length=50)
+    year: int = Field(ge=1000, le=2100)
+    price: float = Field(gt=0)
+    description: str | None = Field(
+        default=None,
+        max_length=500
+    )
+
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    category: str
+    year: int
+    price: float
+    description: str | None = None
+
+
+app = FastAPI()
+
+
+books = [
+    {
+        "id": 1,
+        "title": "Clean Code",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2008,
+        "price": 45.00,
+        "description": "A practical guide to writing readable and maintainable code."
+    },
+    {
+        "id": 2,
+        "title": "Clean Architecture",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2017,
+        "price": 49.00,
+        "description": "A guide to designing maintainable software systems."
+    },
+    {
+        "id": 3,
+        "title": "Designing Data-Intensive Applications",
+        "author": "Martin Kleppmann",
+        "category": "database",
+        "year": 2017,
+        "price": 55.00,
+        "description": "A detailed guide to data systems and distributed applications."
+    }
+]
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "Welcome to the Book Catalog API"
+    }
+
+
+@app.get(
+    "/books",
+    response_model=list[BookResponse]
+)
+async def list_books(
+    category: str | None = None,
+    skip: int = 0,
+    limit: int = 10
+):
+    filtered_books = books
+
+    if category is not None:
+        filtered_books = [
+            book
+            for book in books
+            if book["category"].lower() == category.lower()
+        ]
+
+    return filtered_books[skip:skip + limit]
+
+
+@app.get(
+    "/books/{book_id}",
+    response_model=BookResponse
+)
+async def get_book(book_id: int):
+    for book in books:
+        if book["id"] == book_id:
+            return book
+
+    return {
+        "id": 0,
+        "title": "Not Found",
+        "author": "Unknown",
+        "category": "unknown",
+        "year": 2000,
+        "price": 0,
+        "description": None
+    }
+
+
+@app.post(
+    "/books",
+    response_model=BookResponse,
+    status_code=status.HTTP_201_CREATED
+)
+async def create_book(book: BookCreate):
+    new_book = {
+        "id": len(books) + 1,
+        **book.model_dump()
+    }
+
+    books.append(new_book)
+
+    return new_book
+
+62. Run the Application
+
+Start it:
+
+uv run fastapi dev app/main.py
+
+Open:
+
+http://127.0.0.1:8000/docs
+
+You should now see:
+
+GET  /
+GET  /books
+GET  /books/{book_id}
+POST /books
+
+We have just crossed an important milestone.
+
+Our API can now:
+
+READ
++
+CREATE
+
+63. Test GET /books
+
+Open:
+
+GET /books
+
+Execute it.
+
+You should receive a list similar to:
+
+[
+    {
+        "id": 1,
+        "title": "Clean Code",
+        "author": "Robert C. Martin",
+        "category": "software",
+        "year": 2008,
+        "price": 45.0,
+        "description": "A practical guide to writing readable and maintainable code."
+    }
+]
+
+64. Test POST /books
+
+Use:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99,
+    "description": "A practical guide to building FastAPI applications."
+}
+
+The API should respond with:
+
+201 Created
+
+and return the newly created book with its generated ID.
+65. Test Validation
+
+Try:
+
+{
+    "title": "A",
+    "author": "J",
+    "category": "x",
+    "year": 500,
+    "price": -10
+}
+
+This should fail validation.
+
+Why?
+
+Because our model declares:
+
+title → minimum 2 characters
+author → minimum 2 characters
+category → minimum 2 characters
+year → 1000 through 2100
+price → greater than 0
+
+The model is enforcing our API contract.
+66. Test Missing Required Fields
+
+Try:
+
+{
+    "title": "FastAPI in Practice",
+    "year": 2026
+}
+
+The request is missing:
+
+author
+category
+price
+
+The validation layer rejects the request before the endpoint logic processes it.
+
+This is exactly what we want.
+67. Test Optional Fields
+
+Now try:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+Notice that:
+
+description
+
+is missing.
+
+That’s valid because:
+
+description: str | None = None
+
+declares a default value.
+68. What Happens Inside the POST Request?
+
+Let’s visualize the complete flow.
+
+Client
+   |
+   | POST /books
+   |
+   | JSON
+   v
+FastAPI
+   |
+   v
+BookCreate
+   |
+   v
+Validation
+   |
+   +---- Invalid
+   |       |
+   |       v
+   |    Error Response
+   |
+   +---- Valid
+           |
+           v
+       create_book()
+           |
+           v
+       model_dump()
+           |
+           v
+       Store Data
+           |
+           v
+       BookResponse
+           |
+           v
+       201 Created
+
+This is a foundational API architecture pattern.
+69. Request Model vs Response Model in Our Project
+
+We now have:
+
+BookCreate
+
+and:
+
+BookResponse
+
+Think of them as two contracts.
+Incoming contract
+
+BookCreate
+
+says:
+
+    This is what the client is allowed to send.
+
+Outgoing contract
+
+BookResponse
+
+says:
+
+    This is what the API promises to return.
+
+This distinction becomes even more important when we add authentication, database models, internal fields, and role-specific responses.
+70. A Production-Oriented Architecture Principle
+
+We are beginning to establish boundaries.
+
+Eventually, our application will look something like:
+
+HTTP Request
+     |
+     v
+Router
+     |
+     v
+Request Schema
+     |
+     v
+Service
+     |
+     v
+Repository
+     |
+     v
+Database
+     |
+     v
+Response Schema
+     |
+     v
+HTTP Response
+
+Right now we have:
+
+HTTP Request
+     |
+     v
+Endpoint
+     |
+     v
+Pydantic Model
+     |
+     v
+In-Memory List
+     |
+     v
+Response Model
+
+That’s okay.
+
+We’re building the architecture gradually.
+71. Why We Are Not Adding a Database Yet
+
+You might be wondering:
+
+    Why are we still storing books in a list?
+
+Because this chapter is about:
+
+Request Bodies
++
+Pydantic
++
+Validation
++
+Response Models
+
+If we introduce:
+
+Database
+ORM
+Migrations
+Transactions
+Sessions
+Repositories
+
+right now, we would mix several major concepts together.
+
+Instead:
+
+Chapter 3
+Request/Response Models
+       ↓
+Chapter 4
+Better Validation
+       ↓
+Chapter 5
+Error Handling
+       ↓
+Chapter 6
+Routers + Project Architecture
+       ↓
+Later
+Database
+
+This keeps the learning curve manageable.
+72. A Real Problem With Our ID Generation
+
+Our current code uses:
+
+id = len(books) + 1
+
+This works for a demonstration.
+
+But it is not production-safe.
+
+Imagine:
+
+Book 1
+Book 2
+Book 3
+
+Delete book 2.
+
+Now:
+
+Book 1
+Book 3
+
+If we calculate:
+
+len(books) + 1
+
+we might generate an ID that already exists.
+
+This is another reason a real database will eventually become necessary.
+
+A database can provide reliable identity generation.
+
+We are intentionally postponing that complexity.
+73. Another Production Concern: Data Persistence
+
+Our list exists only while the application is running.
+
+If the application stops:
+
+Server stops
+     ↓
+Memory disappears
+     ↓
+New books disappear
+
+This means:
+
+POST /books
+
+works temporarily.
+
+But it isn’t persistent storage.
+
+Later we’ll replace:
+
+books = [...]
+
+with:
+
+Database
+
+Then:
+
+POST /books
+     ↓
+Database INSERT
+     ↓
+Persistent record
+
+That will be a major milestone in the project.
+74. Another Important Concept: Serialization
+
+When we write:
+
+book.model_dump()
+
+we convert model data into a dictionary-like representation.
+
+When FastAPI sends a response, it serializes the data into JSON.
+
+The overall concept is:
+
+Client JSON
+     ↓
+Validation / Parsing
+     ↓
+Pydantic Model
+     ↓
+Application Logic
+     ↓
+Response Model
+     ↓
+JSON
+     ↓
+Client
+
+The request and response travel in different directions, but models provide structure at both boundaries.
+75. What Does response_model Actually Do?
+
+Consider:
+
+@app.get(
+    "/books",
+    response_model=list[BookResponse]
+)
+
+This tells FastAPI:
+
+    The endpoint’s public response should conform to a list of BookResponse objects.
+
+FastAPI uses the response model to:
+
+    document the response
+    validate returned data
+    serialize the result
+    filter fields
+    generate OpenAPI schema
+
+These behaviors are documented in the official FastAPI response-model guide.
+76. Response Filtering Example
+
+Suppose the endpoint accidentally returns:
+
+{
+    "id": 1,
+    "title": "Clean Code",
+    "author": "Robert C. Martin",
+    "price": 45,
+    "internal_cost": 12
+}
+
+But our response model only declares:
+
+class BookResponse(BaseModel):
+    id: int
+    title: str
+    author: str
+    price: float
+
+The response model establishes the public output shape and can filter fields not included in that model.
+
+This is extremely valuable for protecting internal fields.
+77. Field Is More Than Validation
+
+Consider:
+
+price: float = Field(gt=0)
+
+The Field declaration can also carry metadata that becomes part of the generated schema.
+
+For example, we could provide descriptions:
+
+price: float = Field(
+    gt=0,
+    description="The selling price of the book."
+)
+
+That information can appear in the generated API documentation.
+
+This allows us to define:
+
+Data Contract
++
+Validation
++
+Documentation
+
+in one place.
+78. When Should We Use POST?
+
+A common API pattern is:
+
+POST /books
+
+for creating a new resource.
+
+The body contains the new resource information.
+
+For example:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+FastAPI’s request-body documentation identifies POST as the most common HTTP method for sending data to an API, while PUT, PATCH, and DELETE can also have request bodies when appropriate.
+79. Why We Don’t Use GET for Creating Data
+
+A GET request should normally retrieve information.
+
+For example:
+
+GET /books
+
+means:
+
+    Give me books.
+
+A POST request:
+
+POST /books
+
+means:
+
+    Create a new book using this submitted data.
+
+This separation helps clients understand what an endpoint is intended to do.
+80. PUT vs POST — A Preview
+
+We used:
+
+POST /books
+
+to create.
+
+Later we’ll use:
+
+PUT /books/25
+
+to replace an existing resource.
+
+Conceptually:
+
+POST /books
+     ↓
+Create a new book
+
+and:
+
+PUT /books/25
+     ↓
+Replace book 25
+
+FastAPI does not impose these semantics itself; the API design determines how the HTTP methods are used. Its documentation demonstrates PUT for replacing data and PATCH for partial updates.
+
+We’ll study this properly when we implement full CRUD.
+81. PATCH — A Preview
+
+Suppose the book is:
+
+{
+    "title": "FastAPI in Practice",
+    "author": "Jane Developer",
+    "category": "software",
+    "year": 2026,
+    "price": 49.99
+}
+
+We only want to change the price.
+
+A partial update could use:
+
+PATCH /books/25
+
+with:
+
+{
+    "price": 54.99
+}
+
+That means:
+
+    Change only this field.
+
+We’ll explore this later.
+
+The official FastAPI body-updates documentation demonstrates using model_dump(exclude_unset=True) for partial updates and model_copy(update=...) to construct the updated model.
+82. The Book Catalog Project So Far
+
+Our project has evolved significantly.
+Chapter 1
+
+We had:
+
+FastAPI application
+
+Chapter 2
+
+We added:
+
+Routes
+Path Parameters
+Query Parameters
+Filtering
+Pagination
+
+Chapter 3
+
+We now have:
+
+Request Bodies
+Pydantic Models
+Validation
+POST
+201 Created
+Response Models
+
+The project is becoming a real API.
+83. Current API Contract
+
+At the end of this chapter, we have:
+
+GET /
+
+Application welcome message.
+
+GET /books
+
+List books.
+
+GET /books/{book_id}
+
+Retrieve a specific book.
+
+POST /books
+
+Create a new book.
+
+Query parameters:
+
+category
+skip
+limit
+
+Request model:
+
+BookCreate
+
+Response model:
+
+BookResponse
+
+84. Current Architecture
+
+Our current application is still deliberately simple:
+
+book-catalog-api-v2/
+│
+├── app/
+│   └── main.py
+│
+├── pyproject.toml
+└── uv.lock
+
+Inside main.py:
+
+Models
+   ↓
+Application
+   ↓
+Routes
+   ↓
+In-memory data
+
+This won’t remain like this forever.
+
+Soon, we will separate responsibilities.
+85. The Architecture We Are Moving Toward
+
+Eventually:
+
+book-catalog-api/
+│
+├── app/
+│   ├── main.py
+│   │
+│   ├── api/
+│   │   └── routes/
+│   │
+│   ├── schemas/
+│   │
+│   ├── models/
+│   │
+│   ├── services/
+│   │
+│   ├── repositories/
+│   │
+│   ├── core/
+│   │
+│   └── database/
+│
+├── tests/
+│
+├── pyproject.toml
+├── uv.lock
+└── README.md
+
+Don’t create all these directories yet.
+
+We’ll introduce them when the application actually needs them.
+
+This is important:
+
+    Good architecture grows with complexity; it shouldn’t be introduced merely for decoration.
+
+86. Common Beginner Mistakes
+Mistake 1 — Forgetting BaseModel
+
+This:
+
+class Book:
+
+is not a Pydantic model.
+
+We need:
+
+class Book(BaseModel):
+
+Mistake 2 — Forgetting the Type
+
+This:
+
+price
+
+doesn’t describe the expected data.
+
+This:
+
+price: float
+
+does.
+Mistake 3 — Assuming None Makes a Field Optional
+
+Consider:
+
+description: str | None
+
+This expresses that the value can be a string or None.
+
+But if you want the field to be optional in the request, give it a default:
+
+description: str | None = None
+
+The default value is what makes it not required in the request model.
+Mistake 4 — Using One Model Everywhere
+
+For a tiny application, one model may be enough.
+
+For a larger application, consider:
+
+BookCreate
+BookUpdate
+BookResponse
+
+instead of forcing one model to serve every purpose.
+Mistake 5 — Returning Internal Data
+
+Don’t assume:
+
+database object
+
+should automatically become:
+
+API response
+
+Define the public response contract explicitly.
+Mistake 6 — Forgetting 201 Created
+
+A successful resource creation is commonly represented by:
+
+201 Created
+
+rather than simply:
+
+200 OK
+
+FastAPI allows us to declare this directly using status_code.
+Mistake 7 — Treating Validation as Optional
+
+Don’t rely entirely on business logic to discover malformed data.
+
+Validate incoming data at the API boundary.
+87. Industry-Oriented Principle: Trust Boundaries
+
+A professional API should treat external input as untrusted.
+
+The client could send:
+
+wrong type
+missing fields
+unexpected values
+invalid numbers
+malformed structures
+
+Therefore:
+
+External Request
+       |
+       v
+=======================
+ TRUST BOUNDARY
+=======================
+       |
+       v
+Validation
+       |
+       v
+Application
+
+Pydantic models help us establish that boundary.
+88. Industry-Oriented Principle: Explicit Contracts
+
+A good API should make it clear:
+
+What can I send?
+What will I receive?
+What fields are required?
+What values are valid?
+What status code should I expect?
+
+Our models provide much of that contract.
+
+For example:
+
+BookCreate
+
+communicates the input.
+
+And:
+
+BookResponse
+
+communicates the output.
+
+The generated OpenAPI documentation exposes these contracts to API consumers.
+89. Chapter 3 Practice Assignment
+
+Now it’s time to build something independently.
+🎬 Project: Movie Catalog API v2
+
+In Chapter 2, you created a Movie Catalog API.
+
+Now build a new version that accepts structured data.
+
+Do not simply copy the Book Catalog code and rename the fields.
+
+Design the models yourself.
+90. Assignment Objective
+
+Build an API that allows clients to create and retrieve fictional movies.
+
+The API must support:
+
+GET
+POST
+
+and must use:
+
+Pydantic models
+
+for request validation.
+91. Required Movie Model
+
+Create a request model containing at least:
+
+title
+director
+genre
+year
+duration
+rating
+description
+
+Choose appropriate types.
+
+For example:
+
+title → string
+year → integer
+duration → integer
+rating → number
+
+Decide which fields should be required and which should be optional.
+92. Required Endpoints
+
+Implement:
+
+GET /
+
+Return a welcome message.
+List Movies
+
+GET /movies
+
+Return a list of movies.
+Get a Movie
+
+GET /movies/{movie_id}
+
+The ID must be an integer.
+Create a Movie
+
+POST /movies
+
+The request body must use your Pydantic model.
+
+Return:
+
+201 Created
+
+93. Response Model Requirement
+
+Create a separate response model.
+
+For example:
+
+MovieCreate
+MovieResponse
+
+The response should contain an ID.
+
+The request should not require the client to provide the ID.
+
+Think carefully about why.
+94. Validation Requirements
+
+Add validation rules.
+
+At minimum:
+
+title
+→ minimum length
+
+year
+→ sensible range
+
+duration
+→ greater than 0
+
+rating
+→ reasonable range
+
+Use Field.
+
+Don’t manually validate these values inside the endpoint.
+95. Example Request
+
+Your API should be able to accept something similar to:
+
+{
+    "title": "The Future of APIs",
+    "director": "Alex Developer",
+    "genre": "technology",
+    "year": 2026,
+    "duration": 120,
+    "rating": 8.5,
+    "description": "A fictional story about developers building modern APIs."
+}
+
+You can create your own fictional movies.
+96. Assignment Challenge 1 — Optional Fields
+
+Make:
+
+description
+
+optional.
+
+Then verify that this request works:
+
+{
+    "title": "API Revolution",
+    "director": "Sam Developer",
+    "genre": "technology",
+    "year": 2026,
+    "duration": 110,
+    "rating": 8.0
+}
+
+97. Assignment Challenge 2 — Query Parameters
+
+Extend:
+
+GET /movies
+
+to support:
+
+genre
+skip
+limit
+
+For example:
+
+GET /movies?genre=technology&skip=0&limit=5
+
+98. Assignment Challenge 3 — Path + Query + Body
+
+Create:
+
+PUT /movies/{movie_id}?notify=true
+
+The request body should contain movie information.
+
+Your endpoint should return:
+
+movie_id
+notify
+movie
+
+This challenge tests whether you understand the difference between:
+
+Path
+Query
+Body
+
+99. Assignment Challenge 4 — Response Protection
+
+Add an internal field to your stored movie data:
+
+internal_notes
+
+But do not include it in your response model.
+
+Verify that the client cannot see it in the API response.
+
+This is your first practical exercise in response data protection.
+100. Assignment Challenge 5 — Validation Testing
+
+Try intentionally invalid requests.
+Invalid year
+
+{
+    "year": 500
+}
+
+Invalid rating
+
+{
+    "rating": 50
+}
+
+Invalid duration
+
+{
+    "duration": -20
+}
+
+Missing required field
+
+Remove:
+
+title
+
+Observe the validation responses.
+101. Architecture Challenge
+
+Keep your project organized as:
+
+movie-catalog-api/
+├── app/
+│   └── main.py
+├── pyproject.toml
+└── uv.lock
+
+Don’t introduce service layers or repositories yet.
+
+We will refactor the project when the application becomes complex enough to justify them.
+102. Chapter 3 Knowledge Check
+
+Before moving to Chapter 4, make sure you can answer:
+
+    What is a request body?
+    Why is POST commonly used for creating resources?
+    What is Pydantic?
+    What does BaseModel provide?
+    How does FastAPI know a parameter is a request body?
+    What makes a model field required?
+    How do you make a field optional?
+    What does Field do?
+    What does Field(gt=0) mean?
+    What does Field(ge=1000, le=2100) mean?
+    What is model_dump() used for?
+    What is response_model?
+    Why should input and output models often be separate?
+    Why is 201 Created appropriate for successful creation?
+    What happens when invalid request data reaches a Pydantic model?
+    Why should validation happen near the API boundary?
+    Why shouldn’t internal database data automatically become an API response?
+    Why are we still using an in-memory collection instead of a database?
+
+If you can answer these questions and complete the Movie Catalog assignment, you’re ready for the next level.

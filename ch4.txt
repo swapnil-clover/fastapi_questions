@@ -1,0 +1,1775 @@
+In the previous chapters, we built the foundation of our FastAPI journey: setting up the project with modern uv, understanding routes and HTTP methods, and working with path and query parameters.
+
+Now we reach an important turning point.
+
+Until now, our API has mainly received small pieces of information through URLs.
+
+But real applications do something much more interesting.
+
+A customer registers.
+
+A user creates an order.
+
+An administrator adds a product.
+
+A developer updates an employee record.
+
+A mobile application sends profile information.
+
+In all these situations, we need to send structured data to our API.
+
+That is where request bodies, Pydantic models, and validation become essential.
+
+FastAPI’s official documentation uses Pydantic models to declare request bodies. FastAPI then reads JSON data, converts and validates it, provides the validated model to the endpoint, and incorporates the model into the generated OpenAPI documentation.
+
+This chapter will take our project one significant step closer to an industry-style API.
+Chapter 4 Learning Objectives
+
+By the end of this chapter, you will understand:
+
+    What an HTTP request body is
+    Why APIs need request bodies
+    How Pydantic models work with FastAPI
+    How to create request schemas
+    Required and optional fields
+    Data type validation
+    Field() validation
+    String validation
+    Numeric validation
+    Combining path parameters, query parameters, and request bodies
+    How FastAPI automatically generates validation errors
+    How validation appears in Swagger UI
+    Why schemas should be separated from business logic
+    How to organize request models in a maintainable project
+    How to build a small production-oriented API
+    How this architecture prepares us for databases and CRUD operations in later chapters
+
+Most importantly, we will continue evolving the project rather than throwing away everything we built previously.
+1. Why Request Bodies Matter
+
+Imagine an API endpoint for creating a product.
+
+We might need to send:
+
+name
+description
+price
+category
+stock quantity
+
+Putting all this information into the URL would be a poor API design.
+
+Instead, the client sends structured JSON data in the request body.
+
+For example:
+
+{
+    "name": "Mechanical Keyboard",
+    "description": "Wireless mechanical keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+The API receives this data and validates it before processing it.
+
+This gives us an important architecture:
+
+Client
+   │
+   │ JSON Request
+   ▼
+FastAPI Endpoint
+   │
+   ▼
+Pydantic Validation
+   │
+   ├── Invalid → 422 Validation Error
+   │
+   └── Valid
+        │
+        ▼
+Business Logic
+        │
+        ▼
+Response
+
+This separation is one of the reasons FastAPI is so productive.
+2. What Is a Request Body?
+
+A request body is the data sent by a client to an API.
+
+For example, when creating a product:
+
+POST /api/v1/products
+Content-Type: application/json
+
+The request body might contain:
+
+{
+    "name": "Mechanical Keyboard",
+    "price": 89.99
+}
+
+The request body is especially common with:
+
+    POST
+    PUT
+    PATCH
+
+FastAPI’s documentation notes that request bodies are normally used with these methods, with POST being the most common. A body on GET is discouraged because its behavior is undefined in the specifications and some intermediaries may not support it properly.
+3. Request Body vs Query Parameter
+
+This distinction is extremely important.
+
+Consider:
+
+GET /products?category=electronics
+
+Here:
+
+category=electronics
+
+is a query parameter.
+
+Now consider:
+
+POST /products
+
+with:
+
+{
+    "name": "Mechanical Keyboard",
+    "price": 89.99
+}
+
+The JSON is the request body.
+
+A useful mental model is:
+
+URL
+│
+├── Path Parameters
+│      /products/10
+│
+└── Query Parameters
+       /products?category=electronics
+
+Request Body
+│
+└── JSON
+      {
+          "name": "...",
+          "price": 89.99
+      }
+
+FastAPI can distinguish these automatically based on how endpoint parameters are declared. Path-matching parameters come from the path, simple scalar parameters generally become query parameters, and Pydantic model parameters become request bodies.
+4. Introducing Pydantic Models
+
+This is one of the most important concepts in FastAPI.
+
+We define the expected structure using a model.
+
+Example:
+
+ProductCreate
+│
+├── name
+├── description
+├── price
+├── category
+└── stock
+
+The model tells FastAPI:
+
+    “This is what a valid product creation request should look like.”
+
+A simplified model looks like:
+
+class ProductCreate(BaseModel):
+    name: str
+    price: float
+    stock: int
+
+Now FastAPI knows:
+
+name  → string
+price → number
+stock → integer
+
+The client can’t simply send arbitrary data and expect the API to accept it.
+5. Why This Is Better Than Accepting a Dictionary
+
+A beginner might write an endpoint like:
+
+async def create_product(data: dict):
+    ...
+
+This works, but it gives us much less structure.
+
+We don’t clearly communicate:
+
+    which fields are required
+    what type each field should have
+    which values are valid
+    what the API documentation should display
+
+A Pydantic model solves these problems.
+
+FastAPI can use the model to:
+
+    Read JSON
+    Convert values where appropriate
+    Validate the input
+    Produce structured validation errors
+    Generate JSON Schema
+    Include that schema in OpenAPI
+    Display it in Swagger UI
+    Provide editor/type support while writing the application
+
+This is much closer to how professional APIs are designed.
+6. Our Chapter Project
+
+We will continue developing our API into a small Product Catalog API.
+
+Eventually, this project will grow into a more complete application with:
+
+Product Catalog API
+│
+├── Products
+├── Categories
+├── Database
+├── CRUD operations
+├── Validation
+├── Error handling
+├── Authentication
+├── Authorization
+├── Testing
+├── Dependency Injection
+├── Pagination
+└── Production deployment
+
+We are intentionally building it gradually.
+
+For this chapter, our focus is:
+
+    Accepting and validating product creation data.
+
+7. Program Objective
+Program: Product Creation API
+
+Our program will expose an endpoint that allows a client to submit product information.
+
+For example:
+
+{
+    "name": "Mechanical Keyboard",
+    "description": "Wireless mechanical keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+The API will:
+
+    Receive the request
+    Validate the request body
+    Validate product fields
+    Generate a product ID
+    Return a structured response
+    Demonstrate automatic validation errors
+    Demonstrate Swagger documentation
+
+We will also keep the project organized so it can grow later.
+8. Project Structure
+
+Let’s create the following structure:
+
+fastapi-product-api/
+│
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── routes/
+│   │       ├── __init__.py
+│   │       └── products.py
+│   │
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── product.py
+│   │
+│   └── services/
+│       ├── __init__.py
+│       └── product_service.py
+│
+├── tests/
+│   └── __init__.py
+│
+├── pyproject.toml
+└── README.md
+
+Notice something important.
+
+We are not putting everything inside main.py.
+
+That’s intentional.
+
+As applications become larger, placing routes, schemas, business logic, database operations, and configuration into one file quickly becomes difficult to maintain.
+
+Our architecture will gradually move toward:
+
+Routes
+   ↓
+Schemas
+   ↓
+Services
+   ↓
+Repositories
+   ↓
+Database
+
+We aren’t building every layer yet.
+
+We’re preparing the foundation.
+9. Step 1 — Create the Project
+
+If you’re starting from scratch:
+
+uv init fastapi-product-api
+cd fastapi-product-api
+
+Add FastAPI:
+
+uv add "fastapi[standard]"
+
+The project should now contain the dependency information in pyproject.toml.
+10. Step 2 — Create the Directories
+
+Create:
+
+app/
+app/api/
+app/api/routes/
+app/schemas/
+app/services/
+tests/
+
+Then create the required __init__.py files.
+
+The resulting structure should look like:
+
+fastapi-product-api/
+│
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── routes/
+│   │       ├── __init__.py
+│   │       └── products.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── product.py
+│   └── services/
+│       ├── __init__.py
+│       └── product_service.py
+│
+└── tests/
+    └── __init__.py
+
+11. Step 3 — Create the Product Schema
+
+Create:
+
+app/schemas/product.py
+
+Add:
+
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+
+class ProductCreate(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            min_length=3,
+            max_length=100,
+            description="Product name",
+        ),
+    ]
+
+    description: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=500,
+            description="Product description",
+        ),
+    ]
+
+    price: Annotated[
+        float,
+        Field(
+            gt=0,
+            description="Product price must be greater than zero",
+        ),
+    ]
+
+    category: Annotated[
+        str,
+        Field(
+            min_length=2,
+            max_length=50,
+            description="Product category",
+        ),
+    ]
+
+    stock: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="Available inventory quantity",
+        ),
+    ]
+
+Take a moment to understand what we just accomplished.
+
+We have created a contract for incoming product data.
+12. Understanding the Schema
+
+Our model says:
+
+name
+
+must be:
+
+string
+minimum length = 3
+maximum length = 100
+
+description is optional:
+
+string or None
+maximum length = 500
+
+price must be:
+
+greater than 0
+
+category must be:
+
+2–50 characters
+
+stock must be:
+
+0 or greater
+
+These aren’t merely comments.
+
+FastAPI and Pydantic can enforce these constraints.
+13. Why Use Annotated?
+
+You will see this pattern frequently in modern FastAPI applications:
+
+Annotated[
+    str,
+    Field(...)
+]
+
+The first part describes the actual type:
+
+str
+
+The second part provides metadata and validation:
+
+Field(...)
+
+For example:
+
+name: Annotated[
+    str,
+    Field(min_length=3, max_length=100)
+]
+
+Conceptually:
+
+Type
+ +
+Validation
+ +
+Metadata
+
+This is a modern, explicit style that works well with FastAPI’s current documentation and type-hint-driven design.
+
+FastAPI similarly recommends Annotated for parameter validation such as Query and Path.
+14. Understanding Field()
+
+Pydantic’s Field() allows us to specify validation rules and metadata inside models.
+
+For example:
+
+price: Annotated[
+    float,
+    Field(gt=0)
+]
+
+means:
+
+price > 0
+
+Similarly:
+
+stock: Annotated[
+    int,
+    Field(ge=0)
+]
+
+means:
+
+stock >= 0
+
+FastAPI’s documentation explains that Field can be used inside Pydantic models for validation and metadata in much the same way that Query, Path, and Body are used for endpoint parameters.
+15. Numeric Validation
+
+Some important numeric constraints are:
+Constraint	Meaning
+gt	greater than
+ge	greater than or equal
+lt	less than
+le	less than or equal
+
+For example:
+
+Field(gt=0)
+
+means:
+
+value > 0
+
+Whereas:
+
+Field(ge=0)
+
+means:
+
+value >= 0
+
+This distinction is important.
+
+A price should generally be:
+
+> 0
+
+while inventory may legitimately be:
+
+= 0
+
+FastAPI uses these same numeric validation concepts for path and query parameters.
+16. Step 4 — Create the Service Layer
+
+Now let’s avoid putting business logic directly into the route.
+
+Create:
+
+app/services/product_service.py
+
+Add:
+
+from uuid import uuid4
+
+from app.schemas.product import ProductCreate
+
+
+def create_product(product: ProductCreate) -> dict:
+    product_data = product.model_dump()
+
+    return {
+        "id": str(uuid4()),
+        **product_data,
+    }
+
+This is deliberately simple.
+
+We aren’t using a database yet.
+
+But we’re already establishing a useful architectural boundary:
+
+HTTP Request
+      ↓
+Route
+      ↓
+Service
+      ↓
+Response
+
+Later:
+
+HTTP Request
+      ↓
+Route
+      ↓
+Service
+      ↓
+Repository
+      ↓
+Database
+
+This is much easier to maintain than putting everything inside the route handler.
+17. Step 5 — Create the Product Route
+
+Create:
+
+app/api/routes/products.py
+
+Add:
+
+from fastapi import APIRouter, status
+
+from app.schemas.product import ProductCreate
+from app.services.product_service import create_product
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["Products"],
+)
+
+
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_product_endpoint(product: ProductCreate):
+    return create_product(product)
+
+Look carefully at this line:
+
+product: ProductCreate
+
+This is where FastAPI recognizes:
+
+    “The product data comes from the request body.”
+
+Because ProductCreate is a Pydantic model, FastAPI can validate the incoming JSON automatically.
+18. Step 6 — Connect the Router
+
+Now open:
+
+app/main.py
+
+Add:
+
+from fastapi import FastAPI
+
+from app.api.routes.products import router as products_router
+
+
+app = FastAPI(
+    title="Product Catalog API",
+    version="0.1.0",
+    description="A production-oriented FastAPI learning project.",
+)
+
+
+app.include_router(products_router)
+
+Now our application knows about the product routes.
+19. Step 7 — Run the Application
+
+Run:
+
+uv run fastapi dev app/main.py
+
+You should see the development server start.
+
+Open the interactive documentation in your browser:
+
+/docs
+
+You should see:
+
+Product Catalog API
+
+and a section such as:
+
+Products
+
+POST /products/
+
+Expand it.
+
+FastAPI should show the request body schema generated from our Pydantic model.
+
+This is one of FastAPI’s most useful features:
+
+    Your type declarations become part of your API documentation.
+
+FastAPI uses the models to generate JSON Schema and include that schema in the application’s OpenAPI specification, which is then displayed in the interactive API documentation.
+20. Step 8 — Test a Valid Request
+
+Open:
+
+POST /products/
+
+Click:
+
+Try it out
+
+Enter:
+
+{
+    "name": "Mechanical Keyboard",
+    "description": "Wireless mechanical keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+Execute the request.
+
+You should receive a response similar to:
+
+{
+    "id": "generated-id",
+    "name": "Mechanical Keyboard",
+    "description": "Wireless mechanical keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+The ID will be different each time because we generate it using uuid4().
+21. Step 9 — Test Validation
+
+Now let’s intentionally break our API.
+
+Try:
+
+{
+    "name": "Keyboard",
+    "description": "Wireless keyboard",
+    "price": -50,
+    "category": "electronics",
+    "stock": -5
+}
+
+We have multiple problems:
+
+price = -50
+
+violates:
+
+gt=0
+
+And:
+
+stock = -5
+
+violates:
+
+ge=0
+
+FastAPI/Pydantic will reject the request.
+
+You don’t have to write code such as:
+
+if price <= 0:
+    return error
+
+for every field.
+
+The validation system handles it.
+22. Test Missing Fields
+
+Now try:
+
+{
+    "name": "Keyboard",
+    "price": 89.99
+}
+
+We’re missing:
+
+category
+stock
+
+Both are required.
+
+The validation response will tell the client which fields are missing.
+
+This is extremely useful in real applications because API clients immediately know what went wrong.
+23. Test String Validation
+
+Try:
+
+{
+    "name": "PC",
+    "description": "Wireless keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 10
+}
+
+Our name has only two characters.
+
+But the schema requires:
+
+min_length=3
+
+Therefore, the request is rejected.
+
+This is much safer than allowing invalid data into your business logic.
+24. What Happens Internally?
+
+When the client sends:
+
+{
+    "name": "Mechanical Keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+FastAPI processes it roughly like this:
+
+Client
+  │
+  │ JSON
+  ▼
+FastAPI
+  │
+  ▼
+Pydantic Model
+  │
+  ├── name → valid
+  ├── price → valid
+  ├── category → valid
+  └── stock → valid
+  │
+  ▼
+Endpoint Function
+  │
+  ▼
+Service Layer
+  │
+  ▼
+Response
+
+If validation fails:
+
+Client
+  │
+  │ Invalid JSON/data
+  ▼
+FastAPI
+  │
+  ▼
+Pydantic Validation
+  │
+  ✕
+  │
+  ▼
+Validation Error Response
+
+The endpoint doesn’t proceed with invalid input.
+
+That is exactly what we want.
+25. Combining Path + Query + Body
+
+Now let’s learn something very important.
+
+FastAPI can use all three simultaneously:
+
+Path Parameter
++
+Query Parameter
++
+Request Body
+
+The official documentation explicitly demonstrates this combination.
+
+For example:
+
+PUT /products/100?notify=true
+
+with:
+
+{
+    "name": "Mechanical Keyboard",
+    "price": 99.99,
+    "category": "electronics",
+    "stock": 20
+}
+
+FastAPI knows:
+
+100
+↓
+Path parameter
+
+notify=true
+↓
+Query parameter
+
+JSON
+↓
+Request body
+
+This is a fundamental FastAPI skill.
+26. Add a Product Update Endpoint
+
+Let’s extend our project.
+
+Open:
+
+app/api/routes/products.py
+
+Replace it with:
+
+from typing import Annotated
+
+from fastapi import APIRouter, Path, Query, status
+
+from app.schemas.product import ProductCreate
+from app.services.product_service import create_product
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["Products"],
+)
+
+
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_product_endpoint(product: ProductCreate):
+    return create_product(product)
+
+
+@router.put(
+    "/{product_id}",
+)
+async def update_product_endpoint(
+    product_id: Annotated[
+        int,
+        Path(
+            title="Product ID",
+            ge=1,
+        ),
+    ],
+    product: ProductCreate,
+    notify: Annotated[
+        bool,
+        Query(description="Whether the client should be notified"),
+    ] = False,
+):
+    return {
+        "product_id": product_id,
+        "notify": notify,
+        "product": product.model_dump(),
+    }
+
+Now we have:
+
+POST /products/
+
+and:
+
+PUT /products/{product_id}
+
+27. Test the Update Endpoint
+
+Use:
+
+PUT /products/10?notify=true
+
+Request body:
+
+{
+    "name": "Mechanical Keyboard Pro",
+    "description": "Premium wireless mechanical keyboard",
+    "price": 129.99,
+    "category": "electronics",
+    "stock": 15
+}
+
+FastAPI separates the values automatically:
+
+product_id
+    ↓
+10
+
+notify
+    ↓
+true
+
+product
+    ↓
+JSON request body
+
+This is one of the major advantages of FastAPI’s declarative approach.
+28. Why Annotated Is Becoming Important
+
+You may notice:
+
+product_id: Annotated[
+    int,
+    Path(...)
+]
+
+and:
+
+notify: Annotated[
+    bool,
+    Query(...)
+] = False
+
+The modern approach keeps the type and metadata clearly separated.
+
+For example:
+
+Annotated[
+    int,
+    Path(ge=1)
+]
+
+can be read as:
+
+This value is an integer
++
+it has path-specific validation
+
+Similarly:
+
+Annotated[
+    bool,
+    Query(...)
+]
+
+means:
+
+This value is a boolean
++
+it comes from the query string
+
+FastAPI’s current documentation recommends the Annotated style for these parameter declarations when possible.
+29. The Three Data Sources
+
+At this point, you should be able to recognize this:
+
+@app.put("/products/{product_id}")
+async def update_product(
+    product_id: Annotated[int, Path(...)],
+    product: ProductCreate,
+    notify: Annotated[bool, Query(...)] = False,
+):
+
+There are three sources.
+Path
+
+/product/100
+
+becomes:
+
+product_id = 100
+
+Query
+
+?notify=true
+
+becomes:
+
+notify = True
+
+Body
+
+{
+    "name": "...",
+    "price": 99.99
+}
+
+becomes:
+
+product = ProductCreate(...)
+
+Remember this pattern.
+
+You will use it constantly when developing real APIs.
+30. A Small but Important Detail: model_dump()
+
+In our service:
+
+product_data = product.model_dump()
+
+Why?
+
+Because product is a Pydantic model.
+
+We often need a regular dictionary representation when:
+
+    storing data
+    passing data to another layer
+    preparing a response
+    communicating with a database
+    serializing information
+
+So:
+
+ProductCreate object
+        ↓
+model_dump()
+        ↓
+dictionary
+
+For example:
+
+product.model_dump()
+
+could produce:
+
+{
+    "name": "Mechanical Keyboard",
+    "description": "Wireless mechanical keyboard",
+    "price": 89.99,
+    "category": "electronics",
+    "stock": 25
+}
+
+31. Why We Don’t Use a Database Yet
+
+You may be wondering:
+
+    “Why are we generating an ID instead of saving products to a database?”
+
+Because we’re learning the concepts progressively.
+
+Introducing all of these at once:
+
+FastAPI
++
+Pydantic
++
+SQL
++
+ORM
++
+database sessions
++
+migrations
++
+CRUD
+
+would make the learning process unnecessarily complicated.
+
+Instead:
+
+Chapter 1
+FastAPI + uv foundation
+       ↓
+Chapter 2
+Routing + HTTP concepts
+       ↓
+Chapter 3
+Parameters + API structure
+       ↓
+Chapter 4
+Request bodies + validation
+       ↓
+Future
+Database + CRUD
+       ↓
+Future
+Authentication
+       ↓
+Future
+Testing
+       ↓
+Future
+Production deployment
+
+Each chapter adds another layer.
+
+That is how we will eventually arrive at a professional application.
+32. Program Source Code — Final Version
+
+For this chapter, our final project contains four important files.
+app/schemas/product.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+
+class ProductCreate(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            min_length=3,
+            max_length=100,
+            description="Product name",
+        ),
+    ]
+
+    description: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=500,
+            description="Product description",
+        ),
+    ]
+
+    price: Annotated[
+        float,
+        Field(
+            gt=0,
+            description="Product price must be greater than zero",
+        ),
+    ]
+
+    category: Annotated[
+        str,
+        Field(
+            min_length=2,
+            max_length=50,
+            description="Product category",
+        ),
+    ]
+
+    stock: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="Available inventory quantity",
+        ),
+    ]
+
+app/services/product_service.py
+
+from uuid import uuid4
+
+from app.schemas.product import ProductCreate
+
+
+def create_product(product: ProductCreate) -> dict:
+    product_data = product.model_dump()
+
+    return {
+        "id": str(uuid4()),
+        **product_data,
+    }
+
+app/api/routes/products.py
+
+from typing import Annotated
+
+from fastapi import APIRouter, Path, Query, status
+
+from app.schemas.product import ProductCreate
+from app.services.product_service import create_product
+
+
+router = APIRouter(
+    prefix="/products",
+    tags=["Products"],
+)
+
+
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_product_endpoint(product: ProductCreate):
+    return create_product(product)
+
+
+@router.put(
+    "/{product_id}",
+)
+async def update_product_endpoint(
+    product_id: Annotated[
+        int,
+        Path(
+            title="Product ID",
+            ge=1,
+        ),
+    ],
+    product: ProductCreate,
+    notify: Annotated[
+        bool,
+        Query(description="Whether the client should be notified"),
+    ] = False,
+):
+    return {
+        "product_id": product_id,
+        "notify": notify,
+        "product": product.model_dump(),
+    }
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.api.routes.products import router as products_router
+
+
+app = FastAPI(
+    title="Product Catalog API",
+    version="0.1.0",
+    description="A production-oriented FastAPI learning project.",
+)
+
+
+app.include_router(products_router)
+
+33. Source Code Explanation
+
+Let’s now understand the architecture we created.
+main.py
+
+This is the application entry point.
+
+Its responsibility is primarily:
+
+Create application
++
+Configure application
++
+Register routers
+
+We don’t want business logic here.
+products.py
+
+This contains HTTP route definitions.
+
+For example:
+
+POST /products/
+PUT /products/{product_id}
+
+The route layer is responsible for handling HTTP-level concerns.
+product.py
+
+This contains our request schema.
+
+The schema describes:
+
+What data is allowed?
+What data is required?
+What types are expected?
+What validation rules apply?
+
+This is our API contract.
+product_service.py
+
+This contains business logic.
+
+The service currently does something simple:
+
+Product model
+     ↓
+Dictionary
+     ↓
+Generate ID
+     ↓
+Return product
+
+Later it could become:
+
+Product model
+     ↓
+Business rules
+     ↓
+Repository
+     ↓
+Database
+     ↓
+Saved product
+
+34. Why This Structure Is Industry-Oriented
+
+We could have written everything like this:
+
+main.py
+
+with:
+
+models
+routes
+validation
+business logic
+database
+
+all mixed together.
+
+That might be acceptable for a tiny demonstration.
+
+But it doesn’t scale well.
+
+Our approach separates responsibilities:
+
+app/
+│
+├── main.py
+│
+├── api/
+│   └── routes/
+│
+├── schemas/
+│
+└── services/
+
+Each directory has a clear purpose.
+
+This makes the project easier to:
+
+    understand
+    test
+    extend
+    debug
+    review
+    maintain
+    refactor
+
+And we’re only four chapters into the journey.
+35. What Have We Built?
+
+At the beginning of the chapter, we had:
+
+API
+↓
+Receives requests
+
+Now we have:
+
+Client
+    │
+    ▼
+FastAPI Router
+    │
+    ▼
+Request Body
+    │
+    ▼
+Pydantic Validation
+    │
+    ├── Invalid → Validation Error
+    │
+    └── Valid
+          │
+          ▼
+      Service Layer
+          │
+          ▼
+       Response
+
+That’s a substantial step toward a real API.
+36. Common Beginner Mistakes
+Mistake 1 — Treating request bodies as dictionaries
+
+Avoid designing your API around arbitrary dictionaries when the structure is known.
+
+Prefer:
+
+product: ProductCreate
+
+over:
+
+data: dict
+
+Mistake 2 — Putting validation inside the route
+
+Avoid:
+
+if len(product["name"]) < 3:
+    ...
+
+for every field.
+
+Use your schema to express validation rules.
+Mistake 3 — Putting business logic into routes
+
+Avoid making the route responsible for:
+
+validation
++
+business rules
++
+database operations
++
+response formatting
+
+Instead:
+
+Route
+ ↓
+Service
+ ↓
+Repository
+ ↓
+Database
+
+We’ll build the remaining layers in later chapters.
+Mistake 4 — Ignoring generated documentation
+
+Don’t think of /docs as merely a demonstration feature.
+
+The OpenAPI schema generated from your type declarations becomes an important API contract and can support documentation and tooling. FastAPI automatically exposes the interactive documentation based on that schema.
+37. Practice Assignment — Customer Registration API
+
+Now it’s your turn.
+
+We don’t want you to simply copy the Product API.
+
+Instead, build something new.
+Project: Customer Registration API
+
+Create a new API that accepts customer registration information.
+
+Your request body should contain:
+
+full_name
+email
+age
+phone
+city
+
+Requirements
+
+Create a Pydantic model with appropriate validation.
+
+For example:
+
+full_name
+
+should have a reasonable minimum and maximum length.
+
+email
+
+should be validated appropriately.
+
+age
+
+should have a sensible numeric range.
+
+city
+
+should have string length validation.
+Build These Endpoints
+1. Create Customer
+
+POST /customers/
+
+Request body:
+
+{
+    "full_name": "Alex Morgan",
+    "email": "alex@example.com",
+    "age": 29,
+    "phone": "9876543210",
+    "city": "Mumbai"
+}
+
+2. Get Customer
+
+Create:
+
+GET /customers/{customer_id}
+
+Use a path parameter.
+3. Search Customers
+
+Create:
+
+GET /customers/
+
+Add a query parameter:
+
+city
+
+4. Update Customer
+
+Create:
+
+PUT /customers/{customer_id}
+
+This endpoint should demonstrate:
+
+Path Parameter
++
+Query Parameter
++
+Request Body
+
+38. Practice Assignment — Validation Challenge
+
+Your API must correctly reject:
+Invalid name
+
+A
+
+Invalid age
+
+-5
+
+Missing email
+
+No email field
+
+Invalid city
+
+Use a city value that violates your chosen length rules.
+
+The goal is not just to make the endpoint work.
+
+The goal is to make the API reject bad data before business logic processes it.
+39. Practice Assignment — Architecture Challenge
+
+Do not put everything into one file.
+
+Use:
+
+app/
+│
+├── main.py
+├── api/
+│   └── routes/
+├── schemas/
+└── services/
+
+Your challenge is to create:
+
+customer.py
+
+inside:
+
+schemas/
+
+and:
+
+customers.py
+
+inside:
+
+api/routes/
+
+Then create a customer service module.
+
+This will reinforce the architectural pattern introduced in this chapter.
+40. Chapter Challenge
+
+Before moving to Chapter 5, make sure you can answer these questions without looking at the code.
+Question 1
+
+What is a request body?
+Question 2
+
+Why do we use Pydantic models?
+Question 3
+
+What does this mean?
+
+product: ProductCreate
+
+Question 4
+
+What is the difference between:
+
+gt=0
+
+and:
+
+ge=0
+
+Question 5
+
+Why do we use:
+
+Annotated
+
+Question 6
+
+Where should business logic live?
+
+main.py
+route
+schema
+service
+
+Question 7
+
+What happens when invalid request data is submitted?
+Question 8
+
+How can FastAPI know whether a parameter comes from:
+
+Path
+Query
+Body
+
+If you can explain these concepts, you have understood the core of this chapter.
+41. FastAPI Official Documentation
+
+For this chapter, the primary references are FastAPI’s official documentation:
+
+    Request Body — FastAPI Documentation
+    Query Parameters and String Validations
+    Path Parameters and Numeric Validations
+    Body — Fields
+    Body — Multiple Parameters
+
+These are the official FastAPI references used to shape the concepts and examples in this chapter.
+42. Chapter 4 Takeaway
+
+We have crossed an important boundary.
+
+Previously, our API mainly understood:
+
+URLs
+Paths
+Queries
+HTTP methods
+
+Now it understands:
+
+Structured JSON
+        ↓
+Pydantic Models
+        ↓
+Validation
+        ↓
+Business Logic
+
+And our project architecture is beginning to look like a real application:
+
+                 Client
+                   │
+                   ▼
+              FastAPI API
+                   │
+             ┌─────┴─────┐
+             │           │
+          Path/Query   Body
+             │           │
+             └─────┬─────┘
+                   ▼
+              Validation
+                   │
+                   ▼
+                 Route
+                   │
+                   ▼
+                Service
+                   │
+                   ▼
+               Response
+
+Next, we can make this project much more realistic.

@@ -1,0 +1,857 @@
+
+Chapter 8: Connecting FastAPI to a Database — SQLAlchemy Models, Sessions & Relationships
+By OTLMS / August 10, 2026
+Let’s Start With a Real Problem
+
+Every project in this series so far has used a Python list as a “database”:
+
+_fake_users_db: list[dict] = []
+
+It’s been great for learning — no setup, no configuration, instant results. But it has one fatal flaw: the moment you restart your server, every single user disappears. Imagine explaining to a client that their entire user base vanishes every time the server reboots. That’s not a toy problem anymore — that’s a resignation letter.
+
+Real applications need data that survives. That’s what a database gives you, and in this chapter, we’ll connect FastAPI to one using SQLAlchemy, the most widely used database toolkit in the Python ecosystem. You’ll learn how to define tables as Python classes, connect them to each other with relationships, and query them safely — all while keeping the same clean, layered project structure we’ve used since Chapter 5.
+What You’ll Learn
+
+    Why ORMs like SQLAlchemy exist, and what problem they solve
+    The modern SQLAlchemy 2.0 style (DeclarativeBase, Mapped, mapped_column)
+    How to set up a database engine, session, and connect it to FastAPI using Depends
+    How to define a one-to-many relationship (a user who has many posts)
+    How to define a many-to-many relationship (posts that have many tags)
+    Theory + hands-on assignment questions to lock in what you’ve learned
+
+We’ll use SQLite in this chapter — a real, file-based database with zero setup — so we can focus entirely on SQLAlchemy concepts. In Chapter 12, we’ll swap it for PostgreSQL without changing much of our application code at all, which is one of the biggest advantages of using an ORM.
+Theory: What Is an ORM, and Why SQLAlchemy?
+
+An ORM (Object-Relational Mapper) lets you interact with database tables using Python classes and objects, instead of writing raw SQL strings everywhere.
+
+Without an ORM, you might write:
+
+cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+
+With SQLAlchemy, you write:
+
+db.get(User, user_id)
+
+Both do the same thing, but the ORM version is type-safe, refactor-friendly, works the same way regardless of which actual database you’re using, and — crucially for us — plays extremely well with FastAPI and Pydantic.
+
+Three core pieces you’ll meet in every SQLAlchemy project:
+Concept	What It Is
+Engine	The core connection to your actual database file/server
+Session	A temporary “workspace” for talking to the database — you open one per request
+Model	A Python class that maps to a database table
+Program 1: Connecting FastAPI to a Real Database
+Program Objective
+
+Build a small, standalone FastAPI project where a User is stored in a real SQLite database using SQLAlchemy — completely replacing the in-memory list from earlier chapters — with working POST /users/register and GET /users/ endpoints.
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init sqlalchemy-basics-demo
+cd sqlalchemy-basics-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+    💡 SQLite support is built into Python’s standard library, so no extra database driver is needed for this chapter.
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+sqlalchemy-basics-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "SQLAlchemy Basics Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},  # needed only for SQLite
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/user.py
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.user import User
+from app.schemas.user import UserCreate
+
+
+def create_user(db: Session, user_in: UserCreate) -> User:
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=f"hashed_{user_in.password}",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def list_users(db: Session) -> list[User]:
+    return db.query(User).all()
+
+app/routers/users.py
+
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, list_users
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    return create_user(db, user_in)
+
+
+@router.get("/", response_model=list[UserOut])
+def get_all_users(db: Session = Depends(get_db)):
+    return list_users(db)
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import user  # noqa: F401 — ensures the model is registered with Base
+from app.routers import users
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    config.py adds database_url as a setting. Because it’s just a string, switching from SQLite to PostgreSQL later (Chapter 12) will only mean changing this one value.
+    db/database.py is the heart of the setup:
+        create_engine(...) — opens the actual connection to the database file (app.db, created automatically in your project folder the first time you run the app). connect_args={"check_same_thread": False} is an SQLite-specific setting needed because FastAPI can handle requests across multiple threads.
+        SessionLocal = sessionmaker(...) — a factory that creates new Session objects. Each incoming API request will get its own fresh session.
+        class Base(DeclarativeBase) — the modern SQLAlchemy 2.0 base class every model inherits from, so SQLAlchemy knows which classes represent database tables.
+        get_db() — a generator function used as a FastAPI dependency. It opens a session, yields it to the route function, and — no matter what happens, even if an error occurs — closes it afterward in the finally block. This pattern guarantees you never leak open database connections.
+    models/user.py defines the actual database table:
+        Mapped[int] and mapped_column(...) are the modern (SQLAlchemy 2.0) way of declaring columns with full type-checker support — this is the style shown throughout SQLAlchemy’s current official documentation.
+        unique=True, index=True on username and email means the database itself enforces no duplicates and can look them up quickly.
+    schemas/user.py is unchanged in spirit from earlier chapters — UserCreate for input, UserOut for output, keeping the password out of every response. from_attributes=True is what allows UserOut to be built directly from a SQLAlchemy User object, not just a plain dictionary.
+    services/user_service.py now takes a db: Session as its first argument in every function:
+        db.add(new_user) stages the new row.
+        db.commit() actually writes it to the database file.
+        db.refresh(new_user) reloads the object from the database, so new_user.id (auto-generated by the database) is populated before we return it.
+        db.query(User).all() retrieves every row from the users table.
+    routers/users.py uses Depends(get_db) to have FastAPI automatically create and clean up a session for every single request — you never manage that lifecycle by hand.
+    main.py calls Base.metadata.create_all(bind=engine) once at startup, which creates the users table in app.db if it doesn’t already exist. We also import app.models.user explicitly so SQLAlchemy is aware of the model before creating tables — a common gotcha if skipped.
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Open http://127.0.0.1:8000/docs and call POST /users/register a couple of times with different usernames.
+    Call GET /users/ and confirm the users come back — no passwords included, exactly like Chapter 5.
+    Stop the server completely, then restart it (Ctrl+C, then uv run fastapi dev app/main.py again). Call GET /users/ once more — your users are still there! Check your project folder too; you’ll see a new app.db file, which is your actual SQLite database.
+
+Program 2: One-to-Many Relationships (A User With Many Posts)
+Program Objective
+
+Extend the database with a Post table, where one user can have many posts, and build endpoints to create a post for a user and view a user together with all their posts in a single response.
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init sqlalchemy-relationships-demo
+cd sqlalchemy-relationships-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+sqlalchemy-relationships-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   └── post.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   └── post.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── user_service.py
+│   │   └── post_service.py
+│   └── routers/
+│       ├── __init__.py
+│       ├── users.py
+│       └── posts.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "SQLAlchemy Relationships Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/user.py
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    posts: Mapped[list["Post"]] = relationship(back_populates="author", cascade="all, delete-orphan")
+
+app/models/post.py
+
+from sqlalchemy import ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(String(2000))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    author: Mapped["User"] = relationship(back_populates="posts")
+
+app/schemas/post.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PostCreate(BaseModel):
+    title: Annotated[str, Field(min_length=3, max_length=200)]
+    content: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class PostOut(BaseModel):
+    id: int
+    title: str
+    content: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.schemas.post import PostOut
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserWithPostsOut(UserOut):
+    posts: list[PostOut] = []
+
+app/services/user_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.user import User
+from app.schemas.user import UserCreate
+
+
+def create_user(db: Session, user_in: UserCreate) -> User:
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=f"hashed_{user_in.password}",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+app/services/post_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.post import Post
+from app.schemas.post import PostCreate
+
+
+def create_post_for_user(db: Session, user_id: int, post_in: PostCreate) -> Post:
+    new_post = Post(title=post_in.title, content=post_in.content, user_id=user_id)
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
+
+app/routers/users.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.user import UserCreate, UserOut, UserWithPostsOut
+from app.services.user_service import create_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    return create_user(db, user_in)
+
+
+@router.get("/{user_id}", response_model=UserWithPostsOut)
+def get_user_with_posts(user_id: int, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    return user
+
+app/routers/posts.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.post import PostCreate, PostOut
+from app.services.post_service import create_post_for_user
+from app.services.user_service import get_user_by_id
+
+router = APIRouter(prefix="/users/{user_id}/posts", tags=["Posts"])
+
+
+@router.post("/", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+def create_post(user_id: int, post_in: PostCreate, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    return create_post_for_user(db, user_id, post_in)
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import post, user  # noqa: F401
+from app.routers import posts, users
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(users.router)
+app.include_router(posts.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    models/post.py introduces the “many” side of the relationship:
+        user_id: Mapped[int] = mapped_column(ForeignKey("users.id")) — this column physically links each post to exactly one row in the users table.
+        author: Mapped["User"] = relationship(back_populates="posts") — this is a Python-level convenience, not a database column. It lets you write some_post.author in code to instantly access the related User object, without writing a manual query.
+    models/user.py adds the “one” side:
+        posts: Mapped[list["Post"]] = relationship(back_populates="author", cascade="all, delete-orphan") — lets you write some_user.posts to get a list of all their posts. back_populates="author" tells SQLAlchemy these two relationship() calls are two sides of the same connection. cascade="all, delete-orphan" means deleting a user also deletes their posts automatically — a sensible default for this kind of “owned” relationship.
+    schemas/user.py now has two output schemas: UserOut (no posts, used for the simple register response) and UserWithPostsOut (extends UserOut and adds posts: list[PostOut]). This is a common, clean pattern — reuse a base schema and extend it for richer responses, rather than cramming every possible field into one schema.
+    services/post_service.py creates a post and explicitly sets user_id, linking it to its owner at creation time.
+    routers/posts.py nests the URL under /users/{user_id}/posts — a RESTful way of expressing “posts that belong to this specific user.” It re-checks that the user exists before creating a post for them, using the same HTTPException pattern from Chapter 7.
+    In main.py, note we import both post and user models before calling create_all — SQLAlchemy needs to see every model that’s part of a relationship before it can correctly build the tables and their foreign keys.
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Register a user via POST /users/register, note their id.
+    Call POST /users/{user_id}/posts with a body like {"title": "My First Post", "content": "Hello world!"}.
+    Call GET /users/{user_id} — confirm the response now includes a posts array containing the post you just created, all in a single request.
+
+Program 3: Many-to-Many Relationships (Posts and Tags)
+Program Objective
+
+Extend the idea further with a many-to-many relationship: a post can have multiple tags, and a tag can belong to multiple posts (e.g., a post tagged both "fastapi" and "python", and the "python" tag also appearing on other posts).
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init sqlalchemy-many-to-many-demo
+cd sqlalchemy-many-to-many-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+sqlalchemy-many-to-many-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── post.py
+│   │   └── tag.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── post.py
+│   │   └── tag.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── post_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── posts.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "SQLAlchemy Many-to-Many Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/tag.py
+
+from sqlalchemy import Column, ForeignKey, Integer, String, Table
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+
+post_tags = Table(
+    "post_tags",
+    Base.metadata,
+    Column("post_id", Integer, ForeignKey("posts.id"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id"), primary_key=True),
+)
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+
+    posts: Mapped[list["Post"]] = relationship(secondary=post_tags, back_populates="tags")
+
+app/models/post.py
+
+from sqlalchemy import String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+from app.models.tag import post_tags
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(String(2000))
+
+    tags: Mapped[list["Tag"]] = relationship(secondary=post_tags, back_populates="posts")
+
+app/schemas/tag.py
+
+from pydantic import BaseModel, ConfigDict
+
+
+class TagOut(BaseModel):
+    id: int
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/schemas/post.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.tag import TagOut
+
+
+class PostCreate(BaseModel):
+    title: Annotated[str, Field(min_length=3, max_length=200)]
+    content: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class PostOut(BaseModel):
+    id: int
+    title: str
+    content: str
+    tags: list[TagOut] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/post_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.post import Post
+from app.models.tag import Tag
+from app.schemas.post import PostCreate
+
+
+def create_post(db: Session, post_in: PostCreate) -> Post:
+    new_post = Post(title=post_in.title, content=post_in.content)
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
+
+
+def add_tag_to_post(db: Session, post_id: int, tag_name: str) -> Post | None:
+    post = db.get(Post, post_id)
+    if post is None:
+        return None
+
+    tag = db.query(Tag).filter(Tag.name == tag_name).first()
+    if tag is None:
+        tag = Tag(name=tag_name)
+        db.add(tag)
+
+    if tag not in post.tags:
+        post.tags.append(tag)
+
+    db.commit()
+    db.refresh(post)
+    return post
+
+app/routers/posts.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.post import PostCreate, PostOut
+from app.services.post_service import add_tag_to_post, create_post
+
+router = APIRouter(prefix="/posts", tags=["Posts"])
+
+
+@router.post("/", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+def create_new_post(post_in: PostCreate, db: Session = Depends(get_db)):
+    return create_post(db, post_in)
+
+
+@router.post("/{post_id}/tags/{tag_name}", response_model=PostOut)
+def tag_post(post_id: int, tag_name: str, db: Session = Depends(get_db)):
+    post = add_tag_to_post(db, post_id, tag_name)
+
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found.")
+
+    return post
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import post, tag  # noqa: F401
+from app.routers import posts
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(posts.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    post_tags = Table(...) is the key new concept: a many-to-many relationship needs a third, “association” table in the database, containing just two foreign keys — one pointing to posts.id, one to tags.id. Unlike Post or Tag, this table doesn’t need its own model class, since we never query it directly — SQLAlchemy manages it behind the scenes.
+    relationship(secondary=post_tags, back_populates="posts") on Tag, and the mirrored version on Post, both point at the same association table via secondary=. This tells SQLAlchemy: “these two are connected through that middle table,” letting you write some_post.tags or some_tag.posts directly.
+    add_tag_to_post demonstrates a common real-world pattern: reuse a tag if it already exists (db.query(Tag).filter(...)), otherwise create a new one — then simply .append() it to post.tags. SQLAlchemy automatically manages inserting the correct row into post_tags for you; you never write raw SQL for the association table.
+    if tag not in post.tags avoids adding the same tag twice to a post — a small but important safeguard.
+    PostOut now includes tags: list[TagOut] = [], so every post response automatically shows its attached tags without any extra query logic in the router.
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Call POST /posts/ with {"title": "Learning FastAPI", "content": "SQLAlchemy relationships are fun!"}, note the returned id.
+    Call POST /posts/{post_id}/tags/fastapi and then POST /posts/{post_id}/tags/python — confirm both calls succeed and the response’s tags array grows each time.
+    Create a second post and tag it python too — this confirms the same tag row is genuinely being shared across two different posts, which is the whole point of many-to-many.
+
+Tips & Instructions for Developers
+
+    ✅ Always use Depends(get_db) to obtain a session in your routes — never create a SessionLocal() manually inside a route function.
+    ✅ Keep your Base.metadata.create_all(bind=engine) call for learning and prototyping, but know that real production projects use a migration tool like Alembic instead, so schema changes are tracked and reversible — we’ll introduce this properly once we reach PostgreSQL in Chapter 12.
+    ✅ Import every model file before calling create_all(), even ones you don’t use directly in that file — otherwise SQLAlchemy may not know about a table involved in a relationship.
+    ✅ Use back_populates (not the older backref) for new projects — it’s more explicit and is what current SQLAlchemy documentation recommends.
+    ✅ Choose cascade="all, delete-orphan" deliberately — only use it when child rows (like posts) genuinely shouldn’t exist without their parent (like a user).
+    ❌ Don’t put database queries directly inside your router functions — keep that in the service layer, exactly like we’ve done since Chapter 5.
+    ❌ Don’t forget db.commit() after db.add(...) — without it, your changes exist only in the session, not in the actual database file.
+
+Official FastAPI Documentation References
+
+    SQL (Relational) Databases
+    SQLAlchemy Official Documentation — ORM Quick Start
+    SQLAlchemy Relationship Configuration
+    FastAPI Dependencies
+    FastAPI Bigger Applications (Project Structure)
+
+Theory Questions
+
+    What problem does an ORM like SQLAlchemy solve compared to writing raw SQL?
+    What is the difference between the engine and a Session in SQLAlchemy?
+    Why does get_db() use yield instead of return?
+    What’s the purpose of back_populates in a relationship() call?
+    Why does a many-to-many relationship need a separate association table, while a one-to-many relationship doesn’t?
+
+Practical Assignment
+
+    Extend Program 1: Add a GET /users/{user_id} endpoint that returns 404 (using HTTPException) if the user doesn’t exist, following the pattern from Chapter 7.
+    Extend Program 2: Add a GET /users/{user_id}/posts endpoint that returns only that user’s posts as a plain list (list[PostOut]), separate from the nested UserWithPostsOut response.
+    Extend Program 3: Add a GET /tags/{tag_name}/posts endpoint that returns every post associated with a given tag name — a great way to practice querying from the “many” side of a many-to-many relationship.
+
+Summary
+
+In this chapter, you built three complete, runnable FastAPI projects that each taught you one layer of working with a real database:
+
+    Connecting FastAPI to SQLAlchemy using an engine, session, and the Depends(get_db) pattern
+    Defining a one-to-many relationship between users and posts
+    Defining a many-to-many relationship between posts and tags using an association table
+

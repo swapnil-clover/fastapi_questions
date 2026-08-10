@@ -1,0 +1,863 @@
+
+Chapter 9: Completing CRUD — Update and Delete (PUT, PATCH, DELETE) in FastAPI
+By OTLMS / August 10, 2026
+Let’s Start With a Real Problem
+
+Your app has been live for a week. A user emails support: “I made a typo in my email address during signup — can you fix it?” You open your API… and realize you never built an update endpoint. The only tools you have are “create” and “read.” The only way to “fix” that email is to manually edit the database by hand, or tell the user to delete their account and start over.
+
+CRUD stands for Create, Read, Update, Delete — and so far in this series, we’ve only built the C and the R. This chapter completes the picture. You’ll learn the real difference between PUT and PATCH (a distinction almost every beginner gets wrong at least once), and how to delete data safely, including data with relationships attached to it.
+What You’ll Learn
+
+    The real, spec-accurate difference between PUT and PATCH
+    How to build a full-replacement update endpoint with PUT
+    How to build a partial-update endpoint with PATCH, updating only the fields the client actually sent
+    How to safely delete a resource with DELETE, and what happens to related data
+    Theory + hands-on assignment questions to lock in what you’ve learned
+
+We’ll continue using SQLAlchemy and SQLite, exactly as set up in Chapter 8.
+Theory: PUT vs. PATCH vs. DELETE
+Method	Purpose	Client Sends	Behavior
+PUT	Replace a resource entirely	The complete new representation	Any field not included is expected to be reset/cleared
+PATCH	Partially update a resource	Only the fields being changed	Fields not included stay exactly as they were
+DELETE	Remove a resource	Usually nothing (just the ID in the URL)	The resource (and possibly related data) is gone
+
+This trips up a lot of developers: PUT is meant to be a full replacement. If your API’s PUT /users/5 only receives {"email": "new@example.com"}, spec-correct behavior would treat every other field as unset. In practice, many real-world teams relax this rule for convenience — but it’s important you understand the correct behavior first, which is exactly what Program 1 demonstrates, before you decide to bend it.
+
+PATCH, by contrast, was designed exactly for the “I just want to change one field” use case — which is why it’s usually the better fit for real-world edit forms.
+Program 1: Full Update with PUT
+Program Objective
+
+Build a small, standalone FastAPI project with a PUT /users/{user_id} endpoint that performs a true full replacement — the client must send every editable field, and the record is fully overwritten with what’s provided.
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init put-update-demo
+cd put-update-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+put-update-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "PUT Update Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/user.py
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserReplace(BaseModel):
+    """Used for PUT — the client must send every editable field."""
+
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    is_active: Annotated[bool, Field()]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.user import User
+from app.schemas.user import UserCreate, UserReplace
+
+
+def create_user(db: Session, user_in: UserCreate) -> User:
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=f"hashed_{user_in.password}",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+
+def replace_user(db: Session, user_id: int, data: UserReplace) -> User | None:
+    user = db.get(User, user_id)
+    if user is None:
+        return None
+
+    # Full replacement: every editable field is overwritten, no partial merging.
+    user.username = data.username
+    user.email = data.email
+    user.is_active = data.is_active
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+app/routers/users.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.user import UserCreate, UserOut, UserReplace
+from app.services.user_service import create_user, get_user_by_id, replace_user
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    return create_user(db, user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+
+@router.put("/{user_id}", response_model=UserOut)
+def update_user_full(user_id: int, data: UserReplace, db: Session = Depends(get_db)):
+    user = replace_user(db, user_id, data)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import user  # noqa: F401
+from app.routers import users
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    UserReplace is a dedicated schema, separate from UserCreate — notice it has no password field. Passwords are updated through their own dedicated flow in real apps (covered later in the authentication chapters), never bundled into a generic profile update. Every field in UserReplace is required, not optional — that’s what makes this a true PUT: the client must state the full new picture.
+    replace_user simply overwrites username, email, and is_active directly — no merging, no “keep the old value if not sent” logic. That’s the defining trait of PUT.
+    The router uses @router.put("/{user_id}", ...) — FastAPI provides @router.put() just like @router.get() and @router.post(), mapping directly to the HTTP PUT method.
+    We reuse the exact HTTPException pattern from Chapter 7 for the “not found” case — by now, this should feel like a familiar, repeatable pattern across your whole API.
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Register a user via POST /users/register, note their id.
+    Call PUT /users/{user_id} with a full body, e.g. {"username": "amitk", "email": "amit.k@example.com", "is_active": true}. Confirm the response shows the updated values.
+    Try calling PUT /users/{user_id} with a field missing (e.g., no is_active) — Swagger UI will show a 422 validation error, since PUT requires the complete representation.
+    Call PUT /users/999 (a non-existent ID) and confirm you get a 404.
+
+Program 2: Partial Update with PATCH
+Program Objective
+
+Build a small, standalone FastAPI project with a PATCH /users/{user_id} endpoint that updates only the fields the client actually included in the request, leaving everything else untouched.
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init patch-update-demo
+cd patch-update-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+patch-update-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   └── user.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   └── user_service.py
+│   └── routers/
+│       ├── __init__.py
+│       └── users.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "PATCH Update Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/user.py
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserPatch(BaseModel):
+    """Used for PATCH — every field is optional; only send what changed."""
+
+    username: Annotated[str | None, Field(default=None, min_length=3, max_length=30)]
+    email: Annotated[EmailStr | None, Field(default=None)]
+    is_active: Annotated[bool | None, Field(default=None)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.user import User
+from app.schemas.user import UserCreate, UserPatch
+
+
+def create_user(db: Session, user_in: UserCreate) -> User:
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=f"hashed_{user_in.password}",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+
+def patch_user(db: Session, user_id: int, data: UserPatch) -> User | None:
+    user = db.get(User, user_id)
+    if user is None:
+        return None
+
+    # Only apply fields the client actually sent.
+    update_data = data.model_dump(exclude_unset=True)
+    for field_name, value in update_data.items():
+        setattr(user, field_name, value)
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+app/routers/users.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.user import UserCreate, UserOut, UserPatch
+from app.services.user_service import create_user, get_user_by_id, patch_user
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    return create_user(db, user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+
+@router.patch("/{user_id}", response_model=UserOut)
+def update_user_partial(user_id: int, data: UserPatch, db: Session = Depends(get_db)):
+    user = patch_user(db, user_id, data)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import user  # noqa: F401
+from app.routers import users
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(users.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    UserPatch makes every field optional with default=None. This is the schema-level signal that “the client might send some, all, or none of these fields.”
+    The real magic is in patch_user: data.model_dump(exclude_unset=True) builds a dictionary containing only the fields the client actually included in the request body — not the ones that simply defaulted to None. This is a critical distinction:
+        If the client sends {"email": "new@example.com"}, exclude_unset=True gives you {"email": "new@example.com"} — username and is_active are left out entirely, because they were never mentioned.
+        Without exclude_unset=True, you’d get {"username": None, "email": "new@example.com", "is_active": None} — which would incorrectly wipe out the user’s existing username!
+    setattr(user, field_name, value) then applies only those included fields onto the actual database object, one at a time.
+    This is precisely why PATCH exists as a separate HTTP method from PUT — it has fundamentally different semantics, not just “a smaller PUT.”
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Register a user via POST /users/register.
+    Call PATCH /users/{user_id} with just {"email": "updated@example.com"} — confirm the response shows the new email, but the username is unchanged.
+    Call PATCH /users/{user_id} again with just {"is_active": false} — confirm only that field changes, and the email you set in step 2 is still there.
+    Compare this behavior to Program 1’s PUT, where omitting a field either fails validation or (if you made fields optional) would silently overwrite it — this is the core lesson of the chapter.
+
+Program 3: Deleting Data (and What Happens to Relationships)
+Program Objective
+
+Build a small, standalone FastAPI project with a DELETE /users/{user_id} endpoint, using the User → Post relationship from Chapter 8 to see exactly what happens to related records when their parent is deleted.
+Step-by-Step Implementation
+
+Step 1: Create the project
+
+uv init delete-demo
+cd delete-demo
+uv add fastapi --extra standard
+uv add pydantic-settings
+uv add sqlalchemy
+
+Step 2: Create the project structure
+
+mkdir -p app/core app/db app/models app/schemas app/services app/routers
+touch app/__init__.py app/core/__init__.py app/db/__init__.py app/models/__init__.py app/schemas/__init__.py app/services/__init__.py app/routers/__init__.py
+
+delete-demo/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── core/
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── db/
+│   │   ├── __init__.py
+│   │   └── database.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   └── post.py
+│   ├── schemas/
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   └── post.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── user_service.py
+│   │   └── post_service.py
+│   └── routers/
+│       ├── __init__.py
+│       ├── users.py
+│       └── posts.py
+├── pyproject.toml
+└── uv.lock
+
+Step 3: Create each file with the code below. Step 4: Run and test.
+Complete Working Source Code
+
+app/core/config.py
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "Delete Demo"
+    app_version: str = "1.0.0"
+    database_url: str = "sqlite:///./app.db"
+
+
+settings = Settings()
+
+app/db/database.py
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from app.core.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},
+)
+
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app/models/user.py
+
+from sqlalchemy import Boolean, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    posts: Mapped[list["Post"]] = relationship(back_populates="author", cascade="all, delete-orphan")
+
+app/models/post.py
+
+from sqlalchemy import ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.database import Base
+
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(String(2000))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    author: Mapped["User"] = relationship(back_populates="posts")
+
+app/schemas/user.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class UserCreate(BaseModel):
+    username: Annotated[str, Field(min_length=3, max_length=30)]
+    email: Annotated[EmailStr, Field()]
+    password: Annotated[str, Field(min_length=8, max_length=64)]
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/schemas/post.py
+
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PostCreate(BaseModel):
+    title: Annotated[str, Field(min_length=3, max_length=200)]
+    content: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
+class PostOut(BaseModel):
+    id: int
+    title: str
+    content: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+app/services/user_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.user import User
+from app.schemas.user import UserCreate
+
+
+def create_user(db: Session, user_in: UserCreate) -> User:
+    new_user = User(
+        username=user_in.username,
+        email=user_in.email,
+        hashed_password=f"hashed_{user_in.password}",
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+def get_user_by_id(db: Session, user_id: int) -> User | None:
+    return db.get(User, user_id)
+
+
+def delete_user(db: Session, user_id: int) -> bool:
+    user = db.get(User, user_id)
+    if user is None:
+        return False
+
+    db.delete(user)
+    db.commit()
+    return True
+
+app/services/post_service.py
+
+from sqlalchemy.orm import Session
+
+from app.models.post import Post
+from app.schemas.post import PostCreate
+
+
+def create_post_for_user(db: Session, user_id: int, post_in: PostCreate) -> Post:
+    new_post = Post(title=post_in.title, content=post_in.content, user_id=user_id)
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
+
+
+def list_posts_for_user(db: Session, user_id: int) -> list[Post]:
+    return db.query(Post).filter(Post.user_id == user_id).all()
+
+app/routers/users.py
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.user import UserCreate, UserOut
+from app.services.user_service import create_user, delete_user, get_user_by_id
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+    return create_user(db, user_in)
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return user
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_user(user_id: int, db: Session = Depends(get_db)):
+    deleted = delete_user(db, user_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+app/routers/posts.py
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
+from app.schemas.post import PostCreate, PostOut
+from app.services.post_service import create_post_for_user, list_posts_for_user
+from app.services.user_service import get_user_by_id
+
+router = APIRouter(prefix="/users/{user_id}/posts", tags=["Posts"])
+
+
+@router.post("/", response_model=PostOut, status_code=status.HTTP_201_CREATED)
+def create_post(user_id: int, post_in: PostCreate, db: Session = Depends(get_db)):
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    return create_post_for_user(db, user_id, post_in)
+
+
+@router.get("/", response_model=list[PostOut])
+def get_posts(user_id: int, db: Session = Depends(get_db)):
+    return list_posts_for_user(db, user_id)
+
+app/main.py
+
+from fastapi import FastAPI
+
+from app.core.config import settings
+from app.db.database import Base, engine
+from app.models import post, user  # noqa: F401
+from app.routers import posts, users
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+app.include_router(users.router)
+app.include_router(posts.router)
+
+
+@app.get("/", tags=["Root"])
+def read_root():
+    return {"message": f"Welcome to {settings.app_name}"}
+
+Detailed Code Explanation
+
+    delete_user fetches the user first (so we can tell the difference between “already gone” and “successfully deleted”), then calls db.delete(user) followed by db.commit(). It returns a plain bool so the router can decide what HTTP response to send.
+    Because User.posts was defined with cascade="all, delete-orphan" back in Chapter 8, deleting a User row automatically deletes every Post row linked to it — SQLAlchemy handles this at the ORM level, without you writing a separate “delete all posts for this user” query.
+    In the router, status_code=status.HTTP_204_NO_CONTENT is set at the decorator level since a successful delete has nothing meaningful to return. We also explicitly return Response(status_code=status.HTTP_204_NO_CONTENT) — for a 204, FastAPI expects no response body at all, and returning an empty Response object avoids accidentally sending one.
+    If the user doesn’t exist, we raise the same HTTPException 404 pattern used throughout this series — consistent error handling, even for deletes.
+    posts.py includes a GET endpoint for listing a user’s posts, specifically so you can verify the cascade delete actually worked during testing.
+
+    ⚠️ Important: Cascade behavior (cascade="all, delete-orphan") is an ORM-level setting — it only takes effect when you delete through SQLAlchemy, as we’re doing here. If someone deletes rows directly via raw SQL or a database GUI tool, this Python-level cascade won’t run. For strict guarantees at the database layer itself, you’d also configure ON DELETE CASCADE on the foreign key — worth knowing as you move toward production, though outside the scope of this chapter.
+
+Execution & Testing
+
+uv run fastapi dev app/main.py
+
+    Register a user via POST /users/register, note their id.
+    Create a post for them via POST /users/{user_id}/posts.
+    Call GET /users/{user_id}/posts — confirm the post is listed.
+    Call DELETE /users/{user_id} — confirm you get a 204 response with no body.
+    Call GET /users/{user_id} — confirm you now get a 404, since the user is gone.
+    Call GET /users/{user_id}/posts again — confirm the list is now empty, proving the cascade delete removed the related post too.
+    Call DELETE /users/{user_id} a second time — confirm you get a 404, since there’s nothing left to delete.
+
+Tips & Instructions for Developers
+
+    ✅ Use PUT only when the client is expected to send the complete resource — and make every field in that schema required, so FastAPI enforces this for you.
+    ✅ Use PATCH with exclude_unset=True whenever you want true partial updates — this is the pattern you’ll use most often for real-world “edit profile” style forms.
+    ✅ Always fetch the record first before updating or deleting it, so you can return a proper 404 instead of silently doing nothing.
+    ✅ Return 204 No Content for successful deletes — there’s nothing meaningful left to send back.
+    ✅ Think carefully about cascade behavior before enabling it — ask “should this child data really disappear when the parent does?”
+    ❌ Don’t reuse your Create schema for PATCH — a Create schema has required fields; a PATCH schema needs every field to be optional.
+    ❌ Don’t forget that model_dump() without exclude_unset=True will include every field, including ones the client never sent, silently overwriting real data with None.
+
+Official FastAPI Documentation References
+
+    Body – Updates
+    Path Parameters
+    Response Status Code
+    SQLAlchemy Session Basics — Deleting
+    SQLAlchemy Cascades
+
+Theory Questions
+
+    What is the fundamental semantic difference between PUT and PATCH, beyond just “PATCH sends less data”?
+    Why does patch_user use model_dump(exclude_unset=True) instead of just model_dump()?
+    Why should a PATCH schema make every field optional, while a Create schema should not?
+    What does cascade="all, delete-orphan" actually do when a parent row is deleted?
+    Why is it good practice to fetch a record first, before updating or deleting it, rather than attempting the operation blindly?
+
+Practical Assignment
+
+    Combine PUT and PATCH: Starting from Program 2’s project, also add the PUT /users/{user_id} full-replacement endpoint from Program 1, so the same project supports both update styles. Test both against the same user and compare the behavior.
+    Delete with confirmation data: Starting from Program 3’s project, modify remove_user so it returns the deleted user’s data (using UserOut and status 200) instead of 204 No Content. Consider which approach you’d actually prefer as an API consumer, and why.
+    Cascade experiment: Starting from Program 3’s project, temporarily change cascade="all, delete-orphan" to remove the cascade entirely, then try deleting a user who has posts. Observe and note down the error SQLAlchemy raises — this is a great way to understand why the cascade setting exists in the first place.
+
+Summary
+
+In this chapter, you built three complete, runnable FastAPI projects that finished the CRUD picture:
+
+    A true full-replacement update using PUT, where every field is required
+    A true partial update using PATCH and exclude_unset=True, where only sent fields change
+    A safe delete using DELETE, including how cascading relationships behave when a parent record is removed
+
